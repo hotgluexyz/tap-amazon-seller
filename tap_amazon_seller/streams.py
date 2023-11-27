@@ -1409,9 +1409,10 @@ class FBAInventoryLedgerDetailedReportStream(AmazonSellerStream):
 
     name = "fba_inventory_ledger_detailed"
     primary_keys = None
-    replication_key = "Date"
+    replication_key = "report_end_date"
     report_id = None
     document_id = None
+    correct_end_date_minus_days = 1
     schema = th.PropertiesList(
         th.Property("Date", th.DateTimeType),
         th.Property("FNSKU", th.StringType),
@@ -1430,6 +1431,15 @@ class FBAInventoryLedgerDetailedReportStream(AmazonSellerStream):
         th.Property("Date and Time", th.DateTimeType),
         th.Property("report_end_date", th.DateTimeType),
     ).to_dict()
+
+    def correct_end_date(self, end_date, start_date, current_date):
+        if end_date >= current_date:
+            # If end_date is greater than today then fetch report for yesterday.
+            end_date = current_date - timedelta(days=self.correct_end_date_minus_days)
+
+        if end_date <= start_date:
+            end_date = start_date
+        return end_date
 
     @backoff.on_exception(
         backoff.expo,
@@ -1458,6 +1468,7 @@ class FBAInventoryLedgerDetailedReportStream(AmazonSellerStream):
                 start_date = current_date - relativedelta(months=months_lookback)
 
             end_date = current_date
+            end_date = self.correct_end_date(end_date, start_date, current_date)
             report_type = "GET_LEDGER_DETAIL_VIEW_DATA"
             report_types = [report_type]
             processing_status = self.config.get("processing_status")
@@ -1487,6 +1498,8 @@ class FBAInventoryLedgerDetailedReportStream(AmazonSellerStream):
                     if "Date" in row:
                         date_object = datetime.strptime(row["Date"], "%m/%d/%Y")
                         row["Date"] = date_object.date().isoformat()
+                        state_end_date = date_object + timedelta(days=1)
+                        row.update({"report_end_date": state_end_date.isoformat()})
                     yield row
 
             # If reports are form loop through, download documents and populate the data.txt
@@ -1496,8 +1509,12 @@ class FBAInventoryLedgerDetailedReportStream(AmazonSellerStream):
                     if "Date" in report_row:
                         date_object = datetime.strptime(report_row["Date"], "%m/%d/%Y")
                         report_row["Date"] = date_object.date().isoformat()
+                        state_end_date = date_object + timedelta(days=1)
                     if context is not None:
-                        report_row.update({"report_end_date": end_date.isoformat()})
+                        if "Date" in report_row:
+                            report_row.update({"report_end_date": state_end_date.isoformat()})
+                        else:    
+                            report_row.update({"report_end_date": end_date.isoformat()})
                     yield report_row
 
         except Exception as e:
