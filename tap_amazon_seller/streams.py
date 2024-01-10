@@ -74,6 +74,7 @@ class MarketplacesStream(AmazonSellerStream):
                 sandbox = self.config.get("sandbox", False)
                 if sandbox is True:
                     allorders = orders.get_orders(CreatedAfter="TEST_CASE_200")
+                    yield {"id": mp}
                 else:
                     allorders = orders.get_orders(CreatedAfter=today_date)
                 yield {"id": mp}
@@ -881,11 +882,13 @@ class ProductDetails(AmazonSellerStream):
     # Optionally, you may also use `schema_filepath` in place of `schema`:
     # schema_filepath = SCHEMAS_DIR / "users.json"
     schema = th.PropertiesList(
-        th.Property("ASIN", th.StringType),
-        th.Property("Identifiers", th.CustomType({"type": ["object", "string"]})),
-        th.Property("AttributeSets", th.CustomType({"type": ["array", "string"]})),
-        th.Property("Relationships", th.CustomType({"type": ["array", "string"]})),
-        th.Property("SalesRankings", th.CustomType({"type": ["array", "string"]})),
+        th.Property("asin", th.StringType),
+        th.Property("attributes", th.CustomType({"type": ["object", "string"]})),
+        th.Property("identifiers", th.CustomType({"type": ["array", "string"]})),
+        th.Property("productTypes", th.CustomType({"type": ["array", "string"]})),
+        th.Property("ranks", th.CustomType({"type": ["array", "string"]})),
+        th.Property("salesRanks", th.CustomType({"type": ["array", "string"]})),
+        th.Property("summaries", th.CustomType({"type": ["array", "string"]})),
         th.Property("marketplace_id", th.StringType),
     ).to_dict()
 
@@ -895,26 +898,27 @@ class ProductDetails(AmazonSellerStream):
         max_tries=10,
         factor=3,
     )
-    @timeout(15)
+    # @timeout(15)
     def get_records(self, context: Optional[dict]) -> Iterable[dict]:
         try:
+            includedData = ["attributes,summaries,identifiers,productTypes,salesRanks"]
             # if context is not None:
             asin = context.get("ASIN")
-            catalog = self.get_sp_catalog(context.get("marketplace_id"))
+            catalog = self.get_sp_catalog(marketplace_id=context.get("marketplace_id"))
             if context.get("marketplace_id") == "JP":
-                items = catalog.list_items(JAN=asin).payload
+                items = catalog.get_catalog_item(JAN=asin).payload
             elif context.get("marketplace_id") in ["FR"]:
-                items = catalog.list_items(EAN=asin).payload
+                items = catalog.get_catalog_item(EAN=asin).payload
             else:
-                items = catalog.get_item(asin=asin).payload
+                items = catalog.get_catalog_item(
+                    asin=asin, includedData=includedData
+                ).payload
             if "Items" in items:
                 if len(items["Items"]) > 0:
                     items = items["Items"][0]
-            items.update({"ASIN": asin})
+
             items.update({"marketplace_id": context.get("marketplace_id")})
             return [items]
-            # else:
-            #     return []
         except Exception as e:
             raise InvalidResponse(e)
 
@@ -1392,8 +1396,7 @@ class SalesTrafficReportStream(AmazonSellerStream):
                 for row in items["reports"]:
                     reports = self.check_report(row["reportId"], report, "json")
                     for report_row in reports:
-                        if context is not None:
-                            report_row.update({"report_end_date": end_date.isoformat()})
+                        report_row.update({"report_end_date": end_date.isoformat()})
                         yield report_row
                 # Move to the next time period
                 start_date = end_date + timedelta(days=1)
@@ -1481,41 +1484,20 @@ class FBAInventoryLedgerDetailedReportStream(AmazonSellerStream):
             report = self.get_sp_reports(marketplace_id=marketplace_id)
             start_date_f = start_date.strftime("%Y-%m-%dT00:00:00")
             end_date_f = end_date.strftime("%Y-%m-%dT23:59:59")
-            items = self.get_reports_list(
-                report, report_types, processing_status, start_date_f, end_date_f
+
+            reports = self.create_report(
+                start_date_f,
+                report,
+                end_date_f,
+                report_type,
+                reportOptions={"eventType": "Adjustments"},
             )
-
-            if not items["reports"]:
-                reports = self.create_report(
-                    start_date_f,
-                    report,
-                    end_date_f,
-                    report_type,
-                    reportOptions={"eventType": "Adjustments"},
-                )
-                for row in reports:
-                    row.update({"report_end_date": end_date.isoformat()})
-                    if "Date" in row:
-                        date_object = datetime.strptime(row["Date"], "%m/%d/%Y")
-                        row["Date"] = date_object.date().isoformat()
-                        state_end_date = date_object + timedelta(days=1)
-                        row.update({"report_end_date": state_end_date.isoformat()})
-                    yield row
-
-            # If reports are form loop through, download documents and populate the data.txt
-            for row in items["reports"]:
-                reports = self.check_report(row["reportId"], report, "json")
-                for report_row in reports:
-                    if "Date" in report_row:
-                        date_object = datetime.strptime(report_row["Date"], "%m/%d/%Y")
-                        report_row["Date"] = date_object.date().isoformat()
-                        state_end_date = date_object + timedelta(days=1)
-                    if context is not None:
-                        if "Date" in report_row:
-                            report_row.update({"report_end_date": state_end_date.isoformat()})
-                        else:    
-                            report_row.update({"report_end_date": end_date.isoformat()})
-                    yield report_row
+            for row in reports:
+                row.update({"report_end_date": end_date.isoformat()})
+                if "Date" in row:
+                    date_object = datetime.strptime(row["Date"], "%m/%d/%Y")
+                    row["Date"] = date_object.date().isoformat()
+                yield row
 
         except Exception as e:
             raise InvalidResponse(e)
@@ -1618,8 +1600,7 @@ class FBACustomerShipmentSalesReportStream(AmazonSellerStream):
                 for row in items["reports"]:
                     reports = self.check_report(row["reportId"], report, "json")
                     for report_row in reports:
-                        if context is not None:
-                            report_row.update({"report_end_date": end_date.isoformat()})
+                        report_row.update({"report_end_date": end_date.isoformat()})
                         yield report_row
                 # Move to the next time period
                 start_date = end_date + timedelta(days=1)
