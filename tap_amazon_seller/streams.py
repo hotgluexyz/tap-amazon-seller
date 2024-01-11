@@ -77,6 +77,7 @@ class MarketplacesStream(AmazonSellerStream):
                     yield {"id": mp}
                 else:
                     allorders = orders.get_orders(CreatedAfter=today_date)
+                    self.logger.info(f"Marketplace {mp} with id {Marketplaces[mp]} is valid for this account.")
                 yield {"id": mp}
                 if sandbox is True:
                     # Since all sandbox orders are same and we found a valid marketplace. Break the loop.
@@ -920,7 +921,8 @@ class ProductDetails(AmazonSellerStream):
             items.update({"marketplace_id": context.get("marketplace_id")})
             return [items]
         except Exception as e:
-            raise InvalidResponse(e)
+            self.logger.warn(e)
+            return []
 
 
 class VendorFulfilmentPurchaseOrdersStream(AmazonSellerStream):
