@@ -14,6 +14,9 @@ class Timeout(Exception):
 class InvalidResponse(Exception):
     pass
 
+class RetriableError(Exception):
+    pass
+
 
 def timeout(seconds_before_timeout):
     def decorate(f):

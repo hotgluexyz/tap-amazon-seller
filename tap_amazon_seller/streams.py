@@ -7,8 +7,8 @@ from singer_sdk import typing as th
 from sp_api.util import load_all_pages
 
 from tap_amazon_seller.client import AmazonSellerStream
-from tap_amazon_seller.utils import InvalidResponse, timeout
-from sp_api.base.exceptions import SellingApiServerException
+from tap_amazon_seller.utils import InvalidResponse, RetriableError, timeout
+from sp_api.base.exceptions import SellingApiServerException, SellingApiRequestThrottledException
 from dateutil.relativedelta import relativedelta
 from sp_api.base import Marketplaces
 from dateutil.parser import parse
@@ -32,13 +32,13 @@ class MarketplacesStream(AmazonSellerStream):
             "marketplace_id": record["id"],
         }
 
+    @timeout(15)
     @backoff.on_exception(
         backoff.expo,
         Exception,
         max_tries=10,
         factor=3,
     )
-    @timeout(15)
     def get_records(self, context: Optional[dict]) -> Iterable[dict]:
         if self.config.get("marketplaces"):
             marketplaces = self.config.get("marketplaces")
@@ -178,14 +178,14 @@ class OrdersStream(AmazonSellerStream):
         ),
     ).to_dict()
 
+
+    @load_all_pages()
     @backoff.on_exception(
         backoff.expo,
-        (Exception),
+        (Exception, RetriableError),
         max_tries=10,
-        factor=3,
+        factor=5,
     )
-    @timeout(15)
-    @load_all_pages()
     def load_all_orders(self, mp, **kwargs):
         """
         a generator function to return all pages, obtained by NextToken
@@ -194,7 +194,11 @@ class OrdersStream(AmazonSellerStream):
             orders = self.get_sp_orders(mp)
             orders_obj = orders.get_orders(**kwargs)
             return orders_obj
+        except SellingApiRequestThrottledException as e:
+            self.logger.info("Caught SellingApiRequestThrottledException, retrying...")
+            raise RetriableError("Request was throttled, retrying...") from e
         except Exception as e:
+            self.logger.error("Caught an exception in load_all_orders: %s", e)
             raise InvalidResponse(e)
 
     def load_order_page(self, mp, **kwargs):
@@ -687,14 +691,13 @@ class WarehouseInventory(AmazonSellerStream):
         th.Property("inventoryDetails", th.CustomType({"type": ["object", "string"]})),
     ).to_dict()
 
+    @load_all_pages()
     @backoff.on_exception(
         backoff.expo,
         (Exception),
         max_tries=10,
         factor=3,
     )
-    @timeout(15)
-    @load_all_pages()
     def load_all_items(self, mp, **kwargs):
         """
         a generator function to return all pages, obtained by NextToken
@@ -812,13 +815,13 @@ class ProductsIventoryStream(AmazonSellerStream):
         else:
             return []
 
+    @timeout(15)
     @backoff.on_exception(
         backoff.expo,
         (Exception),
         max_tries=10,
         factor=3,
     )
-    @timeout(15)
     def get_records(self, context: Optional[dict]) -> Iterable[dict]:
         try:
             start_date = self.get_starting_timestamp(context) or datetime(2005, 1, 1)
@@ -962,14 +965,13 @@ class VendorFulfilmentPurchaseOrdersStream(AmazonSellerStream):
         ),
     ).to_dict()
 
+    @load_all_pages()
     @backoff.on_exception(
         backoff.expo,
         (Exception),
         max_tries=10,
         factor=3,
     )
-    @timeout(15)
-    @load_all_pages()
     def load_all_orders(self, mp, **kwargs):
         """
         a generator function to return all pages, obtained by NextToken
@@ -1049,14 +1051,14 @@ class VendorFulfilmentCustomerInvoicesStream(AmazonSellerStream):
         th.Property("labelData", th.CustomType({"type": ["array", "string"]})),
     ).to_dict()
 
+    @timeout(15)
+    @load_all_pages()
     @backoff.on_exception(
         backoff.expo,
         (Exception),
         max_tries=10,
         factor=3,
     )
-    @timeout(15)
-    @load_all_pages()
     def load_all_orders(self, mp, **kwargs):
         """
         a generator function to return all pages, obtained by NextToken
@@ -1136,14 +1138,14 @@ class VendorPurchaseOrdersStream(AmazonSellerStream):
         th.Property("items", th.CustomType({"type": ["array", "string"]})),
     ).to_dict()
 
+    @timeout(15)
+    @load_all_pages()
     @backoff.on_exception(
         backoff.expo,
         (Exception),
         max_tries=10,
         factor=3,
     )
-    @timeout(15)
-    @load_all_pages()
     def load_all_orders(self, mp, **kwargs):
         """
         a generator function to return all pages, obtained by NextToken
