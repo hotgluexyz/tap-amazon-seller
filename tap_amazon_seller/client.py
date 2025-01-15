@@ -445,11 +445,10 @@ class AmazonSellerStream(Stream):
                                 .get("context", {})
                                 .get(child_stream.replication_key)
                             )
-                            cs_rep_key = parse(cs_rep_key) if cs_rep_key else None
+                            cs_rep_key = cs_rep_key if cs_rep_key else self.config.get("start_date")
                             oldest_rep_key = (
                                 cs_rep_key
-                                if cs_rep_key
-                                and cs_rep_key
+                                if parse(cs_rep_key)
                                 < parse(state.get("starting_replication_value"))
                                 else oldest_rep_key
                             )
