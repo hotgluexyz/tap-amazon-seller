@@ -243,7 +243,7 @@ class OrdersStream(AmazonSellerStream):
     def get_child_context(self, record: dict, context: Optional[dict]) -> dict:
         """Return a context dictionary for child streams."""
         mp = context.get("marketplace_id")
-        return {"AmazonOrderId": record["AmazonOrderId"], "marketplace_id": mp}
+        return {"AmazonOrderId": record["AmazonOrderId"], "marketplace_id": mp, "LastUpdateDate": record["LastUpdateDate"]}
 
 
 class OrderItemsStream(AmazonSellerStream):
@@ -251,7 +251,7 @@ class OrderItemsStream(AmazonSellerStream):
 
     name = "orderitems"
     primary_keys = ["OrderItemId"]
-    replication_key = None
+    replication_key = "LastUpdateDate"
     order_id = "{AmazonOrderId}"
     parent_stream_type = OrdersStream
     schema_writed = False
@@ -340,6 +340,7 @@ class OrderItemsStream(AmazonSellerStream):
                 )
             ),
         ),
+        th.Property("LastUpdateDate", th.DateTimeType)
     ).to_dict()
 
     @backoff.on_exception(
@@ -372,7 +373,7 @@ class OrderBuyerInfo(AmazonSellerStream):
 
     name = "orderbuyerinfo"
     primary_keys = ["AmazonOrderId"]
-    replication_key = None
+    replication_key = "LastUpdateDate"
     order_id = "{AmazonOrderId}"
     parent_stream_type = OrdersStream
     # Optionally, you may also use `schema_filepath` in place of `schema`:
@@ -384,6 +385,7 @@ class OrderBuyerInfo(AmazonSellerStream):
         th.Property("BuyerCounty", th.StringType),
         th.Property("BuyerTaxInfo", th.CustomType({"type": ["object", "string"]})),
         th.Property("PurchaseOrderNumber", th.StringType),
+        th.Property("LastUpdateDate", th.DateTimeType),
     ).to_dict()
 
     @backoff.on_exception(
@@ -409,7 +411,7 @@ class OrderAddress(AmazonSellerStream):
 
     name = "orderaddress"
     primary_keys = ["AmazonOrderId"]
-    replication_key = None
+    replication_key = "LastUpdateDate"
     order_id = "{AmazonOrderId}"
     parent_stream_type = OrdersStream
     # Optionally, you may also use `schema_filepath` in place of `schema`:
@@ -434,6 +436,7 @@ class OrderAddress(AmazonSellerStream):
                 th.Property("AddressType", th.StringType),
             ),
         ),
+        th.Property("LastUpdateDate", th.DateTimeType)
     ).to_dict()
 
     @backoff.on_exception(
@@ -459,7 +462,7 @@ class OrderFinancialEvents(AmazonSellerStream):
 
     name = "orderfinancialevents"
     primary_keys = ["AmazonOrderId"]
-    replication_key = None
+    replication_key = "LastUpdateDate"
     order_id = "{AmazonOrderId}"
     parent_stream_type = OrdersStream
     # Optionally, you may also use `schema_filepath` in place of `schema`:
@@ -549,6 +552,7 @@ class OrderFinancialEvents(AmazonSellerStream):
             "RemovalShipmentAdjustmentEventList",
             th.CustomType({"type": ["array", "string"]}),
         ),
+        th.Property("LastUpdateDate", th.DateTimeType)
     ).to_dict()
 
     @backoff.on_exception(
