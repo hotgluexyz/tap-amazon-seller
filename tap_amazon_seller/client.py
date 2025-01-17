@@ -425,7 +425,9 @@ class AmazonSellerStream(Stream):
             # --------CHANGE-----------
             # if parent stream has selected child streams with state get the oldest value
             if self.replication_key and self.child_streams:
-                oldest_rep_key = state.get("starting_replication_value")
+                oldest_rep_key = None
+                if self.selected:
+                    oldest_rep_key = state.get("starting_replication_value")
                 for child_stream in self.child_streams:
                     if child_stream.selected and child_stream.replication_key:
                         cs_rep_key = (
@@ -446,6 +448,12 @@ class AmazonSellerStream(Stream):
                                 .get(child_stream.replication_key)
                             )
                             cs_rep_key = cs_rep_key if cs_rep_key else self.config.get("start_date")
+                            
+                            # if parent stream is not selected don't include it to get earliest start date
+                            if oldest_rep_key is None:
+                                oldest_rep_key = cs_rep_key
+                                continue
+                            
                             oldest_rep_key = (
                                 cs_rep_key
                                 if parse(cs_rep_key)
