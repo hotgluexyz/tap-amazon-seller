@@ -73,10 +73,11 @@ class MarketplacesStream(AmazonSellerStream):
             yield marketplace
 
     @backoff.on_exception(
-        backoff.expo,
+        backoff.constant,
         RetriableError,
         max_tries=10,
-        factor=3,
+        interval=3,
+        jitter=60
     )
     @timeout(15)
     def validate_marketplace(self, mp):
@@ -98,7 +99,7 @@ class MarketplacesStream(AmazonSellerStream):
             self.logger.error(f"Error getting records for marketplace {mp}: {e}")
             raise e
         except Exception as e:
-            if self.backoff_retries >= 1:
+            if self.backoff_retries >= 9:
                 self.backoff_retries = 0
                 return
             self.backoff_retries += 1
