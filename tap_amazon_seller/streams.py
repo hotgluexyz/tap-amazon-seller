@@ -33,13 +33,6 @@ class MarketplacesStream(AmazonSellerStream):
             "marketplace_id": record["id"],
         }
 
-    @backoff.on_exception(
-        backoff.expo,
-        RetriableError,
-        max_tries=10,
-        factor=3,
-    )
-    @timeout(15)
     def get_records(self, context: Optional[dict]) -> Iterable[dict]:
         if self.config.get("marketplaces"):
             marketplaces = self.config.get("marketplaces")
@@ -67,29 +60,49 @@ class MarketplacesStream(AmazonSellerStream):
                 "JP",
             ]
         # orders = self.get_sp_orders()
-        # Fetch minimum number of orders and verify credentials are working
-        today_date = datetime.today().strftime("%Y-%m-%d")
-        for mp in marketplaces:
-            try:
-                orders = self.get_sp_orders(mp)
-                sandbox = self.config.get("sandbox", False)
-                if sandbox is True:
-                    allorders = orders.get_orders(CreatedAfter="TEST_CASE_200")
-                    yield {"id": mp}
-                else:
-                    allorders = orders.get_orders(CreatedAfter=today_date)
-                    self.logger.info(f"Marketplace {mp} with id {Marketplaces[mp]} is valid for this account.")
+        sandbox = self.config.get("sandbox", False)
+        for mp in marketplaces:    
+            marketplace = self.validate_marketplace(mp)
+            if marketplace is None:
+                self.logger.info(f"Giving up on marketplace {mp}. Moving on to next marketplace")
+                continue
+            if sandbox is True and marketplace:
+                # Since all sandbox orders are same and we found a valid marketplace. Break the loop.
                 yield {"id": mp}
-                if sandbox is True:
-                    # Since all sandbox orders are same and we found a valid marketplace. Break the loop.
-                    break
-            except SellingApiForbiddenException as e:
-                self.logger.info(f"Marketplace {mp} not part of current SP account")
-            except AuthorizationError as e:
-                self.logger.error(f"Error getting records for marketplace {mp}: {e}")
-                raise e
-            except Exception as e:
-                raise RetriableError(e)
+                break
+            yield marketplace
+
+    @backoff.on_exception(
+        backoff.expo,
+        RetriableError,
+        max_tries=10,
+        factor=3,
+    )
+    @timeout(15)
+    def validate_marketplace(self, mp):
+        try:
+            # Fetch minimum number of orders and verify credentials are working
+            today_date = datetime.today().strftime("%Y-%m-%d")
+            orders = self.get_sp_orders(mp)
+            sandbox = self.config.get("sandbox", False)
+            if sandbox is True:
+                allorders = orders.get_orders(CreatedAfter="TEST_CASE_200")
+                return {"id": mp}
+            else:
+                allorders = orders.get_orders(CreatedAfter=today_date)
+                self.logger.info(f"Marketplace {mp} with id {Marketplaces[mp]} is valid for this account.")
+            return {"id": mp}
+        except SellingApiForbiddenException as e:
+            self.logger.info(f"Marketplace {mp} not part of current SP account")
+        except AuthorizationError as e:
+            self.logger.error(f"Error getting records for marketplace {mp}: {e}")
+            raise e
+        except Exception as e:
+            if self.backoff_retries >= 1:
+                self.backoff_retries = 0
+                return
+            self.backoff_retries += 1
+            raise RetriableError(e)
 
 
 class OrdersStream(AmazonSellerStream):
@@ -201,7 +214,7 @@ class OrdersStream(AmazonSellerStream):
             orders_obj = orders.get_orders(**kwargs)
             return orders_obj
         except SellingApiRequestThrottledException as e:
-            if self.backoff_retries >= 11:
+            if self.backoff_retries >= 14:
                 self.logger.warning(
                     f"Giving up on stream {self.name} after {self.backoff_retries} attempts. Ending gracefully."
                 )
