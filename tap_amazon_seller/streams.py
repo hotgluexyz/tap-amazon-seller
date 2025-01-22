@@ -76,8 +76,8 @@ class MarketplacesStream(AmazonSellerStream):
         backoff.constant,
         RetriableError,
         max_tries=10,
-        interval=3,
-        jitter=60
+        interval=30, # we will always backoff 30 sec
+        jitter=None
     )
     @timeout(15)
     def validate_marketplace(self, mp):
@@ -201,10 +201,10 @@ class OrdersStream(AmazonSellerStream):
 
     @load_all_pages()
     @backoff.on_exception(
-        backoff.expo,
+        backoff.constant,
         (Exception, RetriableError),
-        max_tries=15,
-        factor=5,
+        interval=60,
+        jitter=None
     )
     def load_all_orders(self, mp, **kwargs):
         """
@@ -213,6 +213,8 @@ class OrdersStream(AmazonSellerStream):
         try:
             orders = self.get_sp_orders(mp)
             orders_obj = orders.get_orders(**kwargs)
+            # reset the counter once it works
+            self.backoff_retries = 0
             return orders_obj
         except SellingApiRequestThrottledException as e:
             if self.backoff_retries >= 14:
