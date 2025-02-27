@@ -196,6 +196,7 @@ class OrdersStream(AmazonSellerStream):
             "AutomatedShippingSettings",
             th.ObjectType(th.Property("HasAutomatedShippingSettings", th.BooleanType)),
         ),
+        th.Property("MarketplaceName", th.StringType)
     ).to_dict()
 
 
@@ -302,6 +303,7 @@ class OrderItemsStream(AmazonSellerStream):
     order_id = "{AmazonOrderId}"
     parent_stream_type = OrdersStream
     schema_writed = False
+    new_state = {}
 
     schema = th.PropertiesList(
         th.Property("AmazonOrderId", th.StringType),
@@ -387,7 +389,8 @@ class OrderItemsStream(AmazonSellerStream):
                 )
             ),
         ),
-        th.Property("LastUpdateDate", th.DateTimeType)
+        th.Property("LastUpdateDate", th.DateTimeType),
+        th.Property("MarketplaceName", th.StringType)
     ).to_dict()
 
     @backoff.on_exception(
@@ -402,9 +405,9 @@ class OrderItemsStream(AmazonSellerStream):
             order_id = context.get("AmazonOrderId", [])
 
             orders = self.get_sp_orders(context.get("marketplace_id"))
-            # self.state_partitioning_keys = context
-            self.state_partitioning_keys = self.partitions[len(self.partitions) - 1]
-            # self.state_partitioning_keys = self.partitions
+            # keep state for each marketplace partition
+            self.build_child_stream_state(context)
+
             sandbox = self.config.get("sandbox", False)
             if sandbox is False:
                 items = orders.get_order_items(order_id=order_id).payload
@@ -512,6 +515,8 @@ class OrderFinancialEvents(AmazonSellerStream):
     replication_key = "LastUpdateDate"
     order_id = "{AmazonOrderId}"
     parent_stream_type = OrdersStream
+    new_state = {}
+
     # Optionally, you may also use `schema_filepath` in place of `schema`:
     # schema_filepath = SCHEMAS_DIR / "users.json"
     schema = th.PropertiesList(
@@ -599,7 +604,8 @@ class OrderFinancialEvents(AmazonSellerStream):
             "RemovalShipmentAdjustmentEventList",
             th.CustomType({"type": ["array", "string"]}),
         ),
-        th.Property("LastUpdateDate", th.DateTimeType)
+        th.Property("LastUpdateDate", th.DateTimeType),
+        th.Property("MarketplaceName", th.StringType)
     ).to_dict()
 
     @backoff.on_exception(
@@ -617,8 +623,9 @@ class OrderFinancialEvents(AmazonSellerStream):
 
             sandbox = self.config.get("sandbox", False)
             if sandbox is False:
-                # self.state_partitioning_keys = self.partitions
-                self.state_partitioning_keys = self.partitions[len(self.partitions) - 1]
+                # keep state for each marketplace partition
+                self.build_child_stream_state(context)
+
                 items = finance.get_financial_events_for_order(order_id).payload
                 items["AmazonOrderId"] = order_id
             else:

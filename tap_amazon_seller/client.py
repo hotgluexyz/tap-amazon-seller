@@ -403,6 +403,47 @@ class AmazonSellerStream(Stream):
             dataStartTime=start_date_f,
             dataEndTime=end_date_f,
         ).payload
+    
+    def get_child_stream_new_state(self):
+        """
+        Initializes new state dictionary for the stream based on the state file.
+
+        Returns:
+            dict: A dictionary where the keys are marketplace IDs extracted from the 
+                partition contexts, and the values are the corresponding partition dictionaries.
+        """
+        current_state = self.stream_state["partitions"]
+        return {partition["context"]["marketplace_id"]: partition for partition in current_state}
+    
+    def build_child_stream_state(self, context):
+        """
+        Updates a child stream state to store only the latest partition per marketplace.
+
+        Args:
+            context (dict): A dictionary containing the partition context, including the 
+                            "marketplace_id" and "LastUpdateDate".
+
+        Updates:
+            - Initializes `self.new_state` if it hasn't been set yet.
+            - Ensures that for each marketplace (`marketplace_id`), only the partition 
+            with the latest `LastUpdateDate` is stored.
+            - Updates `self.stream_state["partitions"]` with the latest partitions.
+        """
+        # Initialize new state keeping partitions for each marketplace
+        if not self.new_state:
+            self.new_state = self.get_child_stream_new_state()
+        
+        # Update new state with the context with the latest rep_key_value for each marketplace
+        mp = context.get("marketplace_id")
+        if self.new_state.get(mp):
+            current_rep_key_value = parse(self.new_state[mp]["context"]["LastUpdateDate"])
+            if parse(context["LastUpdateDate"]) > current_rep_key_value:
+                self.new_state[mp]["context"] = context
+        else:
+            self.new_state[mp] = {"context": context}
+
+        # update stream state
+        self.stream_state["partitions"] = list(self.new_state.values())
 
     def _sync_records(  # noqa C901  # too complex
         self, context: Optional[dict] = None
@@ -461,6 +502,7 @@ class AmazonSellerStream(Stream):
                                 else oldest_rep_key
                             )
                 # replace parent stream with oldest value
+                oldest_rep_key = self.config.get("start_date") if not oldest_rep_key else oldest_rep_key
                 if oldest_rep_key != state.get("starting_replication_value"):
                     state["starting_replication_value"] = oldest_rep_key
                 #------------
@@ -478,6 +520,9 @@ class AmazonSellerStream(Stream):
                     # Add state context to records if not already present
                     if key not in record:
                         record[key] = val
+                
+                # post process
+                record = self.post_process(record, context)
 
                 # Sync children, except when primary mapper filters out the record
                 if self.stream_maps[0].get_filter_result(record):
@@ -514,3 +559,10 @@ class AmazonSellerStream(Stream):
         self._write_record_count_log(record_count=record_count, context=context)
         # Reset interim bookmarks before emitting final STATE message:
         self._write_state_message()
+
+    def post_process(self, row, context=None):
+        row = super().post_process(row, context)
+        if context:
+            marketplace = context.get("marketplace_id")
+            row["MarketplaceName"] = marketplace
+        return row
