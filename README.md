@@ -1,8 +1,9 @@
 # tap-amazon-seller
 
-`tap-amazon-seller` is a Singer tap for Amazon-Seller.
+**Tap-amazon-seller** tap is a Singer Tap that extracts data from [Amazon Seller Central](https://sellercentral.amazon.com/) and produces JSON-formatted data following the [Singer spec](https://github.com/singer-io/getting-started/blob/master/SPEC.md).
 
-Built with the [Meltano Tap SDK](https://sdk.meltano.com) for Singer Taps.
+Tap-amazon-seller is built to be run on [Hotglue](https://hotglue.com), an embedded integration platform for running Singer Taps and Targets.
+
 
 ## Installation
 
