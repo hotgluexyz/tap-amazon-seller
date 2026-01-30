@@ -28,6 +28,7 @@ from singer_sdk.helpers._state import finalize_state_progress_markers, log_sort_
 from singer_sdk.exceptions import InvalidStreamSortException
 import copy
 from pendulum import parse
+from tap_amazon_seller.utils import enforce_min_backoff
 
 ROOT_DIR = os.environ.get("ROOT_DIR", ".")
 
@@ -161,6 +162,7 @@ class AmazonSellerStream(Stream):
         (Exception),
         max_tries=10,
         factor=5,
+        on_backoff=enforce_min_backoff,
     )
     def create_report(
         self,
@@ -191,6 +193,8 @@ class AmazonSellerStream(Stream):
             if "reportId" in res:
                 self.report_id = res["reportId"]
                 return self.check_report(res["reportId"], reports, report_format_type)
+            else:
+                raise Exception(f"Report creation failed: {res}")
         except Exception as e:
             self.backoff_retries +=1
             raise InvalidResponse(e)

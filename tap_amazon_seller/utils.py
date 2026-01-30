@@ -1,7 +1,8 @@
 import signal
 import time
 from contextlib import contextmanager
-
+import logging
+logger = logging.getLogger("backoff")
 
 class Timeout(Exception):
     def __init__(self, value="Timed Out"):
@@ -42,3 +43,13 @@ def timeout(seconds_before_timeout):
         return new_f
 
     return decorate
+
+def enforce_min_backoff(details):
+    original = details["wait"]
+    details["wait"] = max(original, 30)
+    logger.info(
+        "Backing off %s for %.1fs (original %.1fs)",
+        details["target"].__name__,
+        details["wait"],
+        original,
+    )
