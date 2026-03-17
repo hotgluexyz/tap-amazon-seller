@@ -2,20 +2,32 @@
 import json
 import os
 import sys
+from typing import List
 
 os.environ["ENV_DISABLE_DONATION_MSG"] = "1"
 
-for i, arg in enumerate(sys.argv):
-    if arg == "--config" and i + 1 < len(sys.argv):
+
+def _apply_sandbox_env_from_argv() -> None:
+    """Set AWS_ENV=SANDBOX before sp_api is imported if the config file requests it.
+
+    sp_api reads AWS_ENV at import time, so this must run before the streams
+    import below. Errors reading the file are intentionally ignored here —
+    they will surface as proper exceptions when the SDK validates the config.
+    """
+    for i, arg in enumerate(sys.argv):
+        if arg != "--config" or i + 1 >= len(sys.argv):
+            continue
         try:
             with open(sys.argv[i + 1]) as f:
-                if json.load(f).get("sandbox"):
-                    os.environ["AWS_ENV"] = "SANDBOX"
-        except Exception:
-            pass
-        break
+                config = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return
+        if config.get("sandbox"):
+            os.environ["AWS_ENV"] = "SANDBOX"
+        return
 
-from typing import List
+
+_apply_sandbox_env_from_argv()
 
 from singer_sdk import Stream, Tap
 from singer_sdk import typing as th  # JSON schema typing helpers
