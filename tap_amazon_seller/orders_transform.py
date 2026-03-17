@@ -237,7 +237,7 @@ def _transform_order_item_v2_to_v0(item: dict) -> dict:
         "PromotionIds": promotion_ids,
         "PointsGranted": points_granted,
         "IsTransparency": "TRANSPARENCY" in programs,
-        "BuyerInfo": buyer_info if buyer_info else {},
+        "BuyerInfo": buyer_info or None,
         "BuyerRequestedCancel": buyer_requested_cancel,
     }
 
