@@ -362,7 +362,7 @@ class OrderItemsStream(AmazonSellerStream):
         order = self.get_order_v2(
             order_id,
             mp,
-            included_data=["FULFILLMENT", "PROCEEDS", "PROMOTION", "CANCELLATION"],
+            included_data=["FULFILLMENT", "PROCEEDS", "EXPENSE", "PROMOTION", "CANCELLATION"],
         )
         return [transform_order_items_v2_to_v0(order)]
 
