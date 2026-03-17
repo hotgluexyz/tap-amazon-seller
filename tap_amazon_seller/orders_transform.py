@@ -131,7 +131,6 @@ def transform_order_v2_to_v0(order: dict) -> dict:
         "IsPremiumOrder": "PREMIUM" in programs,
         "IsSoldByAB": None,
         "IsIBA": None,
-        "IsISPU": "IN_STORE_PICK_UP" in programs,
         "DefaultShipFromLocationAddress": None,
         "FulfillmentInstruction": None,
         "AutomatedShippingSettings": None,
@@ -174,6 +173,7 @@ def _transform_order_item_v2_to_v0(item: dict) -> dict:
     proceeds = item.get("proceeds", {})
     breakdowns = proceeds.get("breakdowns", [])
     currency = (proceeds.get("proceedsTotal") or {}).get("currencyCode")
+    expense = item.get("expense", {})
     promotion = item.get("promotion", {})
     cancellation = item.get("cancellation", {})
     programs = item.get("programs") or []
@@ -183,6 +183,18 @@ def _transform_order_item_v2_to_v0(item: dict) -> dict:
         for bd in (promotion.get("breakdowns") or [])
         if bd.get("promotionId")
     ] or None
+
+    points_granted_raw = (expense.get("pointsCost") or {}).get("pointsGranted")
+    points_granted = None
+    if points_granted_raw:
+        monetary = points_granted_raw.get("pointsMonetaryValue") or {}
+        points_granted = {
+            "PointsNumber": points_granted_raw.get("pointsNumber"),
+            "PointsMonetaryValue": {
+                "CurrencyCode": monetary.get("currencyCode"),
+                "Amount": monetary.get("amount"),
+            },
+        }
 
     buyer_requested_cancel = None
     if cancellation:
@@ -204,9 +216,6 @@ def _transform_order_item_v2_to_v0(item: dict) -> dict:
 
     gift_option = packing.get("giftOption")
     is_gift = str(bool(gift_option)).lower() if gift_option is not None else "false"
-
-    item_programs = [p for p in programs if p not in ("TRANSPARENCY",)]
-    amazon_programs = {"Programs": item_programs} if item_programs else None
 
     v0_item = {
         "ASIN": product.get("asin"),
@@ -234,8 +243,8 @@ def _transform_order_item_v2_to_v0(item: dict) -> dict:
         "CODFee": _extract_breakdown(breakdowns, "COD_FEE", default_currency=currency),
         "CODFeeDiscount": _extract_breakdown(breakdowns, "DISCOUNT", "COD_FEE", default_currency=currency),
         "PromotionIds": promotion_ids,
+        "PointsGranted": points_granted,
         "IsTransparency": "TRANSPARENCY" in programs,
-        "AmazonPrograms": amazon_programs,
         "BuyerInfo": buyer_info if buyer_info else {},
         "BuyerRequestedCancel": buyer_requested_cancel,
     }
