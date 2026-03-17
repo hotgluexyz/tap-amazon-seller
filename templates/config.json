@@ -1,0 +1,19 @@
+{
+  "lwa_client_id": "amzn1.application-oa2-client.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "client_secret": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "refresh_token": "Atzr|xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "aws_access_key": "AKIAXXXXXXXXXXXXXXXX",
+  "aws_secret_key": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "role_arn": "arn:aws:iam::123456789012:role/your-sp-api-role",
+  "marketplace": "US",
+  "marketplaces": ["US", "CA", "GB", "DE"],
+  "sandbox": false,
+  "start_date": "2024-01-01T00:00:00Z",
+  "end_date": "2024-12-31T23:59:59Z",
+  "report_types": [
+    "GET_LEDGER_DETAIL_VIEW_DATA",
+    "GET_MERCHANT_LISTINGS_ALL_DATA"
+  ],
+  "processing_status": ["IN_QUEUE", "IN_PROGRESS", "DONE"],
+  "products_include_data": ["attributes", "identifiers", "summaries"]
+}
