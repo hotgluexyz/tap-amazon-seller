@@ -1,7 +1,33 @@
 """Amazon-Seller tap class."""
+import json
 import os
-os.environ["ENV_DISABLE_DONATION_MSG"] = "1"
+import sys
 from typing import List
+
+os.environ["ENV_DISABLE_DONATION_MSG"] = "1"
+
+
+def _apply_sandbox_env_from_argv() -> None:
+    """Set AWS_ENV=SANDBOX before sp_api is imported if the config file requests it.
+
+    sp_api reads AWS_ENV at import time, so this must run before the streams
+    import below. Errors reading the file are intentionally ignored here —
+    they will surface as proper exceptions when the SDK validates the config.
+    """
+    for i, arg in enumerate(sys.argv):
+        if arg != "--config" or i + 1 >= len(sys.argv):
+            continue
+        try:
+            with open(sys.argv[i + 1]) as f:
+                config = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return
+        if config.get("sandbox"):
+            os.environ["AWS_ENV"] = "SANDBOX"
+        return
+
+
+_apply_sandbox_env_from_argv()
 
 from singer_sdk import Stream, Tap
 from singer_sdk import typing as th  # JSON schema typing helpers

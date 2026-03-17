@@ -7,12 +7,11 @@ from singer_sdk.streams import Stream
 from sp_api.api import (
     Finances,
     Inventories,
-    Orders,
+    OrdersV20260101,
     Catalog,
     VendorDirectFulfillmentOrders,
     VendorDirectFulfillmentShipping,
     VendorOrders,
-    CatalogItems,
     AmazonWarehousingAndDistribution,
     Sellers
 )
@@ -20,8 +19,6 @@ from sp_api.base import Marketplaces
 import csv
 import os
 import time
-from tap_amazon_seller.utils import InvalidResponse
-from datetime import datetime
 import json
 import backoff
 from tap_amazon_seller.reportsv3 import ReportsV3
@@ -146,13 +143,18 @@ class AmazonSellerStream(Stream):
             role_arn=self.config.get("role_arn"),
         )
 
-    def get_sp_orders(self, marketplace_id=None):
+    def get_sp_orders_v2(self, marketplace_id=None):
         if marketplace_id is None:
             marketplace_id = self.config.get("marketplace", "US")
-        return Orders(
+        return OrdersV20260101(
             credentials=self.get_credentials(), marketplace=Marketplaces[marketplace_id]
         )
-    
+
+    def get_order_v2(self, order_id, marketplace_id, included_data):
+        client = self.get_sp_orders_v2(marketplace_id)
+        payload = client.get_order(order_id, includedData=included_data).payload
+        return payload.get("order", payload)
+
     def get_sp_sellers(self):
         return Sellers(credentials=self.get_credentials())
 
@@ -366,45 +368,26 @@ class AmazonSellerStream(Stream):
             credentials=self.get_credentials(), marketplace=Marketplaces[marketplace_id]
         )
 
-    def get_valid_marketplaces(self, today_date=None):
-        marketplaces_valid = []
-        if self.config.get("marketplaces"):
-            marketplaces = self.config.get("marketplaces")
-        else:
-            marketplaces = [
-                "US",
-                "CA",
-                "MX",
-                "BR",
-                "ES",
-                "GB",
-                "FR",
-                "NL",
-                "DE",
-                "IT",
-                "SE",
-                "PL",
-                "EG",
-                "TR",
-                "SA",
-                "AE",
-                "IN",
-                "SG",
-                "AU",
-                "JP",
-            ]
-        # orders = self.get_sp_orders()
-        # Fetch minimum number of orders and verify credentials are working
-        if today_date is None:
-            today_date = datetime.today().strftime("%Y-%m-%d")
-        for mp in marketplaces:
-            try:
-                orders = self.get_sp_orders(mp)
-                allorders = orders.get_orders(CreatedAfter=today_date)
-                marketplaces_valid.append(mp)
-            except:
-                output = f"marketplace {mp} not part of current SP account"
-        return marketplaces_valid
+    def get_valid_marketplaces(self):
+        sellers = self.get_sp_sellers()
+        participations = sellers.get_marketplace_participation().payload
+        configured = self.config.get("marketplaces")
+        if isinstance(configured, str):
+            configured = [c.strip() for c in configured.split(",")]
+        country_codes = set(configured) if configured else None
+        canonical_ids = {m.marketplace_id for m in Marketplaces}
+
+        valid = []
+        for entry in participations:
+            if not entry.get("participation", {}).get("isParticipating"):
+                continue
+            mp = entry.get("marketplace", {})
+            if mp.get("id") not in canonical_ids:
+                continue
+            code = mp.get("countryCode")
+            if country_codes is None or code in country_codes:
+                valid.append({"id": code, "name": mp.get("name")})
+        return valid
 
     @backoff.on_exception(
         backoff.expo,
