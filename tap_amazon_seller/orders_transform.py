@@ -1,14 +1,6 @@
 """Transforms orders from the v2026-01-01 API format to the legacy v0 schema."""
 from types import SimpleNamespace
 
-_FULFILLMENT_SERVICE_LEVEL_V2_TO_V0 = {
-    parts: "".join(w.capitalize() for w in parts.split("_"))
-    for parts in [
-        "EXPEDITED", "STANDARD", "FREE_ECONOMY", "NEXT_DAY",
-        "SAME_DAY", "SECOND_DAY", "SCHEDULED",
-    ]
-}
-
 FULFILLMENT_STATUS_V2_TO_V0 = {
     "UNSHIPPED": "Unshipped",
     "PARTIALLY_SHIPPED": "PartiallyShipped",
@@ -77,9 +69,9 @@ def transform_order_v2_to_v0(order: dict) -> dict:
         order_type = "Preorder"
 
     raw_service_level = fulfillment.get("fulfillmentServiceLevel")
-    service_level = _FULFILLMENT_SERVICE_LEVEL_V2_TO_V0.get(
-        raw_service_level,
-        "".join(w.capitalize() for w in raw_service_level.split("_")) if raw_service_level else None,
+    service_level = (
+        "".join(w.capitalize() for w in raw_service_level.split("_"))
+        if raw_service_level else None
     )
 
     order_total = None
