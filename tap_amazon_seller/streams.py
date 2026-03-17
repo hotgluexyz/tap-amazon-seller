@@ -8,7 +8,6 @@ import backoff
 from dateutil.parser import parse
 from dateutil.relativedelta import relativedelta
 from singer_sdk import typing as th
-from sp_api.base import Marketplaces
 from sp_api.base.exceptions import SellingApiBadRequestException, SellingApiNotFoundException
 from sp_api.util import load_all_pages
 
@@ -48,27 +47,11 @@ class MarketplacesStream(AmazonSellerStream):
     )
     @timeout(15)
     def get_records(self, context: Optional[dict]) -> Iterable[dict]:
-        sellers = self.get_sp_sellers()
-        participations = sellers.get_marketplace_participation().payload
-
-        configured = self.config.get("marketplaces")
-        country_codes = set(configured) if configured else None
-
-        canonical_ids = {m.marketplace_id for m in Marketplaces}
-
-        for entry in participations:
-            if not entry.get("participation", {}).get("isParticipating"):
-                continue
-            mp = entry.get("marketplace", {})
-            if mp.get("id") not in canonical_ids:
-                continue
-            code = mp.get("countryCode")
-            if country_codes is not None and code not in country_codes:
-                continue
-            if self.config.get("sandbox", False):
-                yield {"id": code, "name": mp.get("name")}
+        sandbox = self.config.get("sandbox", False)
+        for mp in self.get_valid_marketplaces():
+            yield mp
+            if sandbox:
                 break
-            yield {"id": code, "name": mp.get("name")}
 
 
 class OrdersStream(AmazonSellerStream):
@@ -1298,7 +1281,7 @@ class AFNInventoryCountryStream(AmazonSellerStream):
         report_types = ["GET_AFN_INVENTORY_DATA_BY_COUNTRY"]
         processing_status = self.config.get("processing_status")
         # Get list of valid marketplaces
-        marketplaces = self.get_valid_marketplaces()
+        marketplaces = [mp["id"] for mp in self.get_valid_marketplaces()]
         common_marketplaces = list(set(marketplaces).intersection(eu_marketplaces))
         marketplace_id = None
         if len(common_marketplaces) > 0:

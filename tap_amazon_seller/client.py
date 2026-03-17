@@ -372,7 +372,8 @@ class AmazonSellerStream(Stream):
         sellers = self.get_sp_sellers()
         participations = sellers.get_marketplace_participation().payload
         configured = self.config.get("marketplaces")
-
+        if isinstance(configured, str):
+            configured = [c.strip() for c in configured.split(",")]
         country_codes = set(configured) if configured else None
         canonical_ids = {m.marketplace_id for m in Marketplaces}
 
@@ -385,7 +386,7 @@ class AmazonSellerStream(Stream):
                 continue
             code = mp.get("countryCode")
             if country_codes is None or code in country_codes:
-                valid.append(code)
+                valid.append({"id": code, "name": mp.get("name")})
         return valid
 
     @backoff.on_exception(
