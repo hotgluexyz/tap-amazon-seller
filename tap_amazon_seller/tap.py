@@ -1,6 +1,20 @@
 """Amazon-Seller tap class."""
+import json
 import os
+import sys
+
 os.environ["ENV_DISABLE_DONATION_MSG"] = "1"
+
+for i, arg in enumerate(sys.argv):
+    if arg == "--config" and i + 1 < len(sys.argv):
+        try:
+            with open(sys.argv[i + 1]) as f:
+                if json.load(f).get("sandbox"):
+                    os.environ["AWS_ENV"] = "SANDBOX"
+        except Exception:
+            pass
+        break
+
 from typing import List
 
 from singer_sdk import Stream, Tap
