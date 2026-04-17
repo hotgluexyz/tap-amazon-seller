@@ -24,6 +24,7 @@ from tap_amazon_seller.streams import (
     SalesTrafficReportStream,
     FBAInventoryLedgerDetailedReportStream,
     FBACustomerShipmentSalesReportStream,
+    FBAInventoryLedgerSummaryReportStream,
 )
 
 STREAM_TYPES = [
@@ -44,6 +45,7 @@ STREAM_TYPES = [
     SalesTrafficReportStream,
     FBAInventoryLedgerDetailedReportStream,
     FBACustomerShipmentSalesReportStream,
+    FBAInventoryLedgerSummaryReportStream,
 ]
 
 

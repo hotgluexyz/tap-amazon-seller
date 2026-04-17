@@ -1,7 +1,7 @@
 """Custom client handling, including Amazon-SellerStream base class."""
 
 
-from typing import Any, List, Optional, cast
+from typing import Any, List, Optional, Tuple, cast
 
 from singer_sdk.streams import Stream
 from sp_api.api import (
@@ -566,6 +566,8 @@ class AmazonSellerStream(Stream):
 
     def post_process(self, row, context=None):
         row = super().post_process(row, context)
+        row = {k.replace(" ", ""): v for k, v in row.items()}
+
         if context:
             marketplace = context.get("marketplace_id")
             row["MarketplaceName"] = marketplace
