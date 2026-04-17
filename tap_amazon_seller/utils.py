@@ -18,7 +18,6 @@ class InvalidResponse(Exception):
 class RetriableError(Exception):
     pass
 
-
 def timeout(seconds_before_timeout):
     def decorate(f):
         def handler(signum, frame):
