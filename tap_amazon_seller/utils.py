@@ -1,8 +1,8 @@
 import signal
 import time
 from contextlib import contextmanager
-import logging
-logger = logging.getLogger("backoff")
+
+
 
 class Timeout(Exception):
     def __init__(self, value="Timed Out"):

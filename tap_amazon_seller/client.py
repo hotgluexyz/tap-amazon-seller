@@ -1,7 +1,7 @@
 """Custom client handling, including Amazon-SellerStream base class."""
 
 
-from typing import Any, List, Optional, Tuple, cast
+from typing import Any, List, Optional, cast
 
 from singer_sdk.streams import Stream
 from sp_api.api import (
@@ -191,8 +191,6 @@ class AmazonSellerStream(Stream):
             if "reportId" in res:
                 self.report_id = res["reportId"]
                 return self.check_report(res["reportId"], reports, report_format_type)
-            else:
-                raise Exception(f"Report creation failed: {res}")
         except Exception as e:
             self.backoff_retries +=1
             raise InvalidResponse(e)
@@ -564,7 +562,6 @@ class AmazonSellerStream(Stream):
 
     def post_process(self, row, context=None):
         row = super().post_process(row, context)
-
         if context:
             marketplace = context.get("marketplace_id")
             row["MarketplaceName"] = marketplace
