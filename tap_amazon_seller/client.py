@@ -566,7 +566,6 @@ class AmazonSellerStream(Stream):
 
     def post_process(self, row, context=None):
         row = super().post_process(row, context)
-        row = {k.replace(" ", ""): v for k, v in row.items()}
 
         if context:
             marketplace = context.get("marketplace_id")
