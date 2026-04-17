@@ -3,7 +3,6 @@ import time
 from contextlib import contextmanager
 
 
-
 class Timeout(Exception):
     def __init__(self, value="Timed Out"):
         self.value = value
@@ -17,6 +16,7 @@ class InvalidResponse(Exception):
 
 class RetriableError(Exception):
     pass
+
 
 def timeout(seconds_before_timeout):
     def decorate(f):
