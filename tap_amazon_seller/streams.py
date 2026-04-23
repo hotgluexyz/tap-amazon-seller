@@ -1565,6 +1565,105 @@ class FBAInventoryLedgerDetailedReportStream(AmazonSellerStream):
             raise InvalidResponse(e)
 
 
+class FBAInventoryLedgerSummaryReportStream(AmazonSellerStream):
+    """Define custom stream."""
+
+    name = "fba_inventory_ledger_summary"
+    primary_keys = None
+    replication_key = "report_end_date"
+    report_id = None
+    document_id = None
+    correct_end_date_minus_days = 1
+    schema = th.PropertiesList(
+        th.Property("Date", th.DateTimeType),
+        th.Property("FNSKU", th.StringType),
+        th.Property("ASIN", th.StringType),
+        th.Property("MSKU", th.StringType),
+        th.Property("Title", th.StringType),
+        th.Property("Disposition", th.StringType),
+        th.Property("Starting Warehouse Balance", th.StringType),
+        th.Property("In Transit Between Warehouses", th.StringType),
+        th.Property("Receipts", th.StringType),
+        th.Property("Customer Shipments", th.StringType),
+        th.Property("Customer Returns", th.StringType),
+        th.Property("Vendor Returns", th.StringType),
+        th.Property("Warehouse Transfer In/Out", th.StringType),
+        th.Property("Found", th.StringType),
+        th.Property("Lost", th.StringType),
+        th.Property("Damaged", th.StringType),
+        th.Property("Disposed", th.StringType),
+        th.Property("Other Events", th.StringType),
+        th.Property("Ending Warehouse Balance", th.StringType),
+        th.Property("Unknown Events", th.StringType),
+        th.Property("Location", th.StringType),
+        th.Property("Store", th.StringType),
+        th.Property("reportId", th.StringType),
+        th.Property("MarketplaceName", th.StringType),
+        th.Property("report_end_date", th.DateTimeType),
+    ).to_dict()
+
+    def correct_end_date(self, end_date, start_date, current_date):
+        if end_date >= current_date:
+            end_date = current_date - timedelta(days=self.correct_end_date_minus_days)
+
+        if end_date <= start_date:
+            end_date = start_date
+        return end_date
+
+    @backoff.on_exception(
+        backoff.expo,
+        (Exception),
+        max_tries=15,
+        factor=5,
+    )
+    def get_records(self, context: Optional[dict]) -> Iterable[dict]:
+        try:
+            start_date = self.get_starting_timestamp(context)
+            if start_date:
+                start_date = start_date.replace(tzinfo=None)
+            end_date = None
+            if self.config.get("start_date") and not start_date:
+                start_date = datetime.strptime(
+                    self.config.get("start_date"), "%Y-%m-%dT%H:%M:%S.%fZ"
+                )
+            months_lookback = 18
+            current_date = datetime.now()
+            minimum_start_date = current_date - relativedelta(months=months_lookback)
+            if start_date < minimum_start_date:
+                start_date = current_date - relativedelta(months=months_lookback)
+
+            end_date = current_date
+            end_date = self.correct_end_date(end_date, start_date, current_date)
+            report_type = "GET_LEDGER_SUMMARY_VIEW_DATA"
+            marketplace_id = None
+            if context is not None:
+                marketplace_id = context.get("marketplace_id")
+
+            report = self.get_sp_reports(marketplace_id=marketplace_id)
+            start_date_f = start_date.strftime("%Y-%m-%dT00:00:00")
+            end_date_f = end_date.strftime("%Y-%m-%dT23:59:59")
+
+            reports = self.create_report(
+                start_date_f,
+                report,
+                end_date_f,
+                report_type,
+                reportOptions={
+                    "aggregateByLocation": "FC",
+                    "aggregatedByTimePeriod": "DAILY",
+                },
+            )
+            for row in reports:
+                row.update({"report_end_date": end_date.isoformat()})
+                if "Date" in row:
+                    date_object = datetime.strptime(row["Date"], "%m/%d/%Y")
+                    row["Date"] = date_object.date().isoformat()
+                yield row
+
+        except Exception as e:
+            raise InvalidResponse(e)
+
+
 class FBACustomerShipmentSalesReportStream(AmazonSellerStream):
     """Define custom stream."""
 

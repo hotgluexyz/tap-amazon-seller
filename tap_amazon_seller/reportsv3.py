@@ -6,6 +6,7 @@ from typing import Optional
 import requests
 
 from sp_api.base import sp_endpoint, fill_query_params, ApiResponse
+from sp_api.util.report_document import handle_file
 
 
 class ReportsV3(ReportsV2):
@@ -91,5 +92,5 @@ class ReportsV3(ReportsV2):
                     }
                 )
             if file:
-                self._handle_file(file, decoded_document, character_code)
+                handle_file(file, decoded_document, character_code)
         return res

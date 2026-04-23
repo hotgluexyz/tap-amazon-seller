@@ -24,6 +24,7 @@ from tap_amazon_seller.streams import (
     SalesTrafficReportStream,
     FBAInventoryLedgerDetailedReportStream,
     FBACustomerShipmentSalesReportStream,
+    FBAInventoryLedgerSummaryReportStream,
 )
 
 STREAM_TYPES = [
@@ -44,6 +45,7 @@ STREAM_TYPES = [
     SalesTrafficReportStream,
     FBAInventoryLedgerDetailedReportStream,
     FBACustomerShipmentSalesReportStream,
+    FBAInventoryLedgerSummaryReportStream,
 ]
 
 
@@ -56,9 +58,9 @@ class TapAmazonSeller(Tap):
     config_jsonschema = th.PropertiesList(
         th.Property("lwa_client_id", th.StringType, required=True),
         th.Property("client_secret", th.StringType, required=True),
-        th.Property("aws_access_key", th.StringType, required=True),
-        th.Property("aws_secret_key", th.StringType, required=True),
-        th.Property("role_arn", th.StringType, required=True),
+        th.Property("aws_access_key", th.StringType, required=False),
+        th.Property("aws_secret_key", th.StringType, required=False),
+        th.Property("role_arn", th.StringType, required=False),
         th.Property("refresh_token", th.StringType, required=True),
         th.Property("sandbox", th.BooleanType, default=False),
         th.Property(
