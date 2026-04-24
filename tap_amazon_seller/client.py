@@ -18,7 +18,7 @@ from sp_api.base import Marketplaces
 import csv
 import os
 import time
-from tap_amazon_seller.utils import InvalidResponse
+from tap_amazon_seller.utils import InvalidResponse, fix_mojibake
 from datetime import datetime
 import json
 import backoff
@@ -170,6 +170,8 @@ class AmazonSellerStream(Stream):
         type="GET_LEDGER_DETAIL_VIEW_DATA",
         report_format_type="csv",
         reportOptions=None,
+        encoding="ISO-8859-1",
+        fix_encoding=False,
     ):
         try:
             if self.backoff_retries >= 9:
@@ -190,7 +192,7 @@ class AmazonSellerStream(Stream):
 
             if "reportId" in res:
                 self.report_id = res["reportId"]
-                return self.check_report(res["reportId"], reports, report_format_type)
+                return self.check_report(res["reportId"], reports, report_format_type, encoding=encoding, fix_encoding=fix_encoding)
         except Exception as e:
             self.backoff_retries +=1
             raise InvalidResponse(e)
@@ -226,15 +228,17 @@ class AmazonSellerStream(Stream):
         except Exception as e:
             raise InvalidResponse(e)
 
-    def read_csv(self, file):
+    def read_csv(self, file, encoding="ISO-8859-1", fix_encoding=False):
         finalList = []
         file = f"{ROOT_DIR}/{file}"
         if os.path.isfile(file):
-            with open(file, encoding="ISO-8859-1") as data:
+            with open(file, encoding=encoding) as data:
                 data_reader = csv.DictReader(data, delimiter="\t")
                 for row in data_reader:
                     row["reportId"] = self.report_id
                     row = self.translate_report(row)
+                    if fix_encoding:
+                        row = {k: fix_mojibake(v) if isinstance(v, str) else v for k, v in row.items()}
                     finalList.append(dict(row))
             os.remove(file)
         return finalList
@@ -249,7 +253,7 @@ class AmazonSellerStream(Stream):
             os.remove(file)
         return finalList
 
-    def check_report(self, report_id, reports, report_type="csv"):
+    def check_report(self, report_id, reports, report_type="csv", encoding="ISO-8859-1", fix_encoding=False):
         res = []
         while True:
             report = self.get_report(report_id, reports).payload
@@ -259,7 +263,7 @@ class AmazonSellerStream(Stream):
                 # save the document
                 self.save_document(document_id, reports, report_type)
                 if report_type == "csv":
-                    res = self.read_csv(f"./{document_id}_document.{report_type}")
+                    res = self.read_csv(f"./{document_id}_document.{report_type}", encoding=encoding, fix_encoding=fix_encoding)
                 else:
                     res = self.read_json((f"./{document_id}_document.{report_type}"))
                 break

@@ -1553,6 +1553,8 @@ class FBAInventoryLedgerDetailedReportStream(AmazonSellerStream):
                 end_date_f,
                 report_type,
                 reportOptions={"eventType": "Adjustments"},
+                encoding="utf-8",
+                fix_encoding=True,
             )
             for row in reports:
                 row.update({"report_end_date": end_date.isoformat()})
@@ -1652,6 +1654,8 @@ class FBAInventoryLedgerSummaryReportStream(AmazonSellerStream):
                     "aggregateByLocation": "FC",
                     "aggregatedByTimePeriod": "DAILY",
                 },
+                encoding="utf-8",
+                fix_encoding=True,
             )
             for row in reports:
                 row.update({"report_end_date": end_date.isoformat()})
