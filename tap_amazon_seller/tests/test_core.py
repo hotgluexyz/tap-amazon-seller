@@ -28,15 +28,12 @@ def test_standard_tap_tests():
 def test_list_order_financial_events_pk_and_windows():
     assert ListOrderFinancialEventsStream.WINDOW_DAYS == 30
     assert ListOrderFinancialEventsStream.RETENTION_DAYS == 730
-    assert ListOrderFinancialEventsStream.primary_keys == [
-        "AmazonOrderId",
-        "RequestPK",
-    ]
+    assert ListOrderFinancialEventsStream.primary_keys is None
     assert ListOrderFinancialEventsStream.replication_key == "LastUpdateDate"
     ofe = OrderFinancialEvents.schema["properties"]
     props = ListOrderFinancialEventsStream.schema["properties"]
     assert set(ofe) <= set(props)
-    assert set(props) - set(ofe) == {"RequestPK", "marketplace_id"}
+    assert set(props) - set(ofe) == {"marketplace_id"}
     # hotglue singer validate: only one non-null type per field
     shipment = props["ShipmentEventList"]["type"]
     non_null = [t for t in (shipment if isinstance(shipment, list) else [shipment]) if t != "null"]
@@ -53,20 +50,6 @@ def test_list_order_financial_events_pk_and_windows():
     assert windows[-1][1] == end
     for after, before in windows:
         assert (before - after) <= timedelta(days=30)
-
-
-def test_request_pk():
-    token = "AYADeBUZ8d-F1uZlxrKeYaGn"
-    assert (
-        ListOrderFinancialEventsStream.request_pk(
-            token, "2024-01-01T00:00:00Z", "2024-01-31T00:00:00Z"
-        )
-        == token
-    )
-    synthetic = ListOrderFinancialEventsStream.request_pk(
-        "", "2024-01-01T00:00:00Z", "2024-01-31T00:00:00Z"
-    )
-    assert synthetic.startswith("2024-01-01T00:00:00Z|2024-01-31T00:00:00Z|")
 
 
 def test_clamp_to_retention():

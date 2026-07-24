@@ -641,11 +641,10 @@ class ListOrderFinancialEventsStream(AmazonSellerStream):
     """Bulk financial events via listFinancialEvents (date windows).
 
     Emits one record per AmazonOrderId per API page (group within the page only).
-    RequestPK is Amazon's NextToken when present, else a synthetic per-request id.
     """
 
     name = "list_order_financial_events"
-    primary_keys = ["AmazonOrderId", "RequestPK"]
+    primary_keys = None
     replication_key = "LastUpdateDate"
     parent_stream_type = MarketplacesStream
     marketplace_id = "{marketplace_id}"
@@ -693,7 +692,6 @@ class ListOrderFinancialEventsStream(AmazonSellerStream):
         th.Property("LastUpdateDate", th.DateTimeType),
         th.Property("MarketplaceName", th.StringType),
         th.Property("marketplace_id", th.StringType),
-        th.Property("RequestPK", th.StringType),
     ).to_dict()
 
     @staticmethod
@@ -741,18 +739,6 @@ class ListOrderFinancialEventsStream(AmazonSellerStream):
         """Raise PostedAfter to the earliest date Amazon still retains."""
         earliest = end - timedelta(days=retention_days)
         return start if start >= earliest else earliest
-
-    @staticmethod
-    def request_pk(
-        page_token: str, posted_after: str, posted_before: str
-    ) -> str:
-        """Amazon NextToken when present; else synthetic id for the first page."""
-        if page_token:
-            return page_token
-        return (
-            f"{posted_after}|{posted_before}|"
-            f"{datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}"
-        )
 
     @staticmethod
     def iter_posted_windows(start: datetime, end: datetime, window_days: int = WINDOW_DAYS):
@@ -842,9 +828,7 @@ class ListOrderFinancialEventsStream(AmazonSellerStream):
                 financial_events = self.filter_order_financial_event_fields(
                     page.payload["FinancialEvents"]
                 )
-                req_pk = self.request_pk(page_token, posted_after, posted_before)
                 for record in self.group_financial_events_by_order(financial_events):
-                    record["RequestPK"] = req_pk
                     yield record
 
                 if not page.next_token:
