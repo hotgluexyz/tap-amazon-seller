@@ -734,10 +734,13 @@ class ListOrderFinancialEventsStream(AmazonSellerStream):
 
     @staticmethod
     def clamp_to_retention(
-        start: datetime, end: datetime, retention_days: int = RETENTION_DAYS
+        start: datetime, now: datetime, retention_days: int = RETENTION_DAYS
     ) -> datetime:
-        """Raise PostedAfter to the earliest date Amazon still retains."""
-        earliest = end - timedelta(days=retention_days)
+        """Raise PostedAfter to the earliest date Amazon still retains.
+
+        Retention is relative to request time (``now``), not PostedBefore.
+        """
+        earliest = now - timedelta(days=retention_days)
         return start if start >= earliest else earliest
 
     @staticmethod
@@ -784,12 +787,13 @@ class ListOrderFinancialEventsStream(AmazonSellerStream):
 
     def get_records(self, context: Optional[dict]) -> Iterable[dict]:
         mp = context.get("marketplace_id")
+        now = datetime.utcnow()
         # PostedBefore must be >2 minutes before request time.
-        end = datetime.utcnow() - timedelta(minutes=3)
+        end = now - timedelta(minutes=3)
         start = self.get_starting_timestamp(context) or datetime(2000, 1, 1)
         if getattr(start, "tzinfo", None) is not None:
             start = start.replace(tzinfo=None)
-        clamped = self.clamp_to_retention(start, end, self.RETENTION_DAYS)
+        clamped = self.clamp_to_retention(start, now, self.RETENTION_DAYS)
         if clamped != start:
             self.logger.warning(
                 "PostedAfter %s is outside Amazon finances retention (%s days); "

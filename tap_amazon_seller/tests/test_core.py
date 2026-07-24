@@ -53,16 +53,19 @@ def test_list_order_financial_events_pk_and_windows():
 
 
 def test_clamp_to_retention():
-    end = datetime.datetime(2026, 7, 24, 12, 0, 0)
-    earliest = end - timedelta(days=730)
+    now = datetime.datetime(2026, 7, 24, 12, 0, 0)
+    earliest = now - timedelta(days=730)
     assert (
         ListOrderFinancialEventsStream.clamp_to_retention(
-            datetime.datetime(2000, 1, 1), end
+            datetime.datetime(2000, 1, 1), now
         )
         == earliest
     )
-    inside = end - timedelta(days=100)
-    assert ListOrderFinancialEventsStream.clamp_to_retention(inside, end) == inside
+    inside = now - timedelta(days=100)
+    assert ListOrderFinancialEventsStream.clamp_to_retention(inside, now) == inside
+    # Do not clamp against PostedBefore (utcnow-3m) — that sits 3m outside retention.
+    posted_before = now - timedelta(minutes=3)
+    assert earliest != posted_before - timedelta(days=730)
 
 
 def test_group_financial_events_by_order():
