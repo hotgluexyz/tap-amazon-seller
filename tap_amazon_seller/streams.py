@@ -632,8 +632,6 @@ class OrderFinancialEvents(AmazonSellerStream):
                 items["AmazonOrderId"] = order_id
             else:
                 items = finance.get_financial_events_for_order("TEST_CASE_200").payload
-            # Stay near Finances ~0.5 rps.
-            time.sleep(2)
             return [items["FinancialEvents"]]
         except Exception as e:
             raise InvalidResponse(e)
@@ -766,7 +764,7 @@ class ListTransactionsStream(AmazonSellerStream):
                     yield txn
 
                 next_token = payload.get("nextToken")
-                
+
                 self.logger.info(
                     "list_transactions requested: "
                     "postedAfter=%s postedBefore=%s marketplaceId=%s page=%s "
