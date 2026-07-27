@@ -639,15 +639,15 @@ class OrderFinancialEvents(AmazonSellerStream):
             raise InvalidResponse(e)
 
 
-class ListOrderFinancialEventsStream(AmazonSellerStream):
-    """Bulk financial events via listFinancialEvents (date windows).
+class ListTransactionsStream(AmazonSellerStream):
+    """Finances v2024-06-19 listTransactions (date windows).
 
-    Emits one record per AmazonOrderId per API page (group within the page only).
+    https://developer-docs.amazon/sp-api/reference/listtransactions
     """
 
-    name = "list_order_financial_events"
-    primary_keys = None
-    replication_key = "LastUpdateDate"
+    name = "list_transactions"
+    primary_keys = ["transactionId"]
+    replication_key = "postedDate"
     parent_stream_type = MarketplacesStream
     marketplace_id = "{marketplace_id}"
     # Amazon: window >180 days returns empty; retention >730 days returns InvalidInput.
@@ -655,84 +655,26 @@ class ListOrderFinancialEventsStream(AmazonSellerStream):
     # "errors": [
     #     {
     #         "code": "InvalidInput",
-    #         "message": "Start date: Tue Jun 25 05:00:00 UTC 2024 is not valid, given the retention period: 730",
+    #         "message": "Start date cannot be before 2 years from now",
     #         "details": ""
     #     }
     # ]
     RETENTION_DAYS = 730
-    # Copied from orderfinancialevents; EventLists are array-only (hotglue singer validate
-    # rejects multiple non-null types like ["array","string"]).
     schema = th.PropertiesList(
-        th.Property("AmazonOrderId", th.StringType),
-        th.Property("ShipmentEventList", th.ArrayType(th.ObjectType())),
-        th.Property("RefundEventList", th.ArrayType(th.ObjectType())),
-        th.Property("GuaranteeClaimEventList", th.ArrayType(th.ObjectType())),
-        th.Property("ChargebackEventList", th.ArrayType(th.ObjectType())),
-        th.Property("PayWithAmazonEventList", th.ArrayType(th.ObjectType())),
-        th.Property("ServiceProviderCreditEventList", th.ArrayType(th.ObjectType())),
-        th.Property("RetrochargeEventList", th.ArrayType(th.ObjectType())),
-        th.Property("RentalTransactionEventList", th.ArrayType(th.ObjectType())),
-        th.Property("ProductAdsPaymentEventList", th.ArrayType(th.ObjectType())),
-        th.Property("ServiceFeeEventList", th.ArrayType(th.ObjectType())),
-        th.Property("SellerDealPaymentEventList", th.ArrayType(th.ObjectType())),
-        th.Property("DebtRecoveryEventList", th.ArrayType(th.ObjectType())),
-        th.Property("LoanServicingEventList", th.ArrayType(th.ObjectType())),
-        th.Property("AdjustmentEventList", th.ArrayType(th.ObjectType())),
-        th.Property("SAFETReimbursementEventList", th.ArrayType(th.ObjectType())),
-        th.Property("SellerReviewEnrollmentPaymentEventList", th.ArrayType(th.ObjectType())),
-        th.Property("FBALiquidationEventList", th.ArrayType(th.ObjectType())),
-        th.Property("CouponPaymentEventList", th.ArrayType(th.ObjectType())),
-        th.Property("ImagingServicesFeeEventList", th.ArrayType(th.ObjectType())),
-        th.Property("NetworkComminglingTransactionEventList", th.ArrayType(th.ObjectType())),
-        th.Property("AffordabilityExpenseEventList", th.ArrayType(th.ObjectType())),
-        th.Property("AffordabilityExpenseReversalEventList", th.ArrayType(th.ObjectType())),
-        th.Property("TrialShipmentEventList", th.ArrayType(th.ObjectType())),
-        th.Property("ShipmentSettleEventList", th.ArrayType(th.ObjectType())),
-        th.Property("TaxWithholdingEventList", th.ArrayType(th.ObjectType())),
-        th.Property("RemovalShipmentEventList", th.ArrayType(th.ObjectType())),
-        th.Property("RemovalShipmentAdjustmentEventList", th.ArrayType(th.ObjectType())),
-        th.Property("LastUpdateDate", th.DateTimeType),
-        th.Property("MarketplaceName", th.StringType),
+        th.Property("transactionId", th.StringType),
+        th.Property("postedDate", th.DateTimeType),
+        th.Property("transactionType", th.StringType),
+        th.Property("transactionStatus", th.StringType),
+        th.Property("description", th.StringType),
+        th.Property("sellingPartnerMetadata", th.ObjectType()),
+        th.Property("relatedIdentifiers", th.ArrayType(th.ObjectType())),
+        th.Property("totalAmount", th.ObjectType()),
+        th.Property("marketplaceDetails", th.ObjectType()),
+        th.Property("items", th.ArrayType(th.ObjectType())),
+        th.Property("contexts", th.ArrayType(th.ObjectType())),
+        th.Property("breakdowns", th.ArrayType(th.ObjectType())),
         th.Property("marketplace_id", th.StringType),
     ).to_dict()
-
-    @staticmethod
-    def filter_order_financial_event_fields(financial_events: dict) -> dict:
-        """Keep only fields declared on this stream (ignore extra Amazon lists)."""
-        allowed = ListOrderFinancialEventsStream.schema["properties"]
-        return {k: v for k, v in financial_events.items() if k in allowed}
-
-    @staticmethod
-    def group_financial_events_by_order(financial_events: dict) -> list:
-        """Group a FinancialEvents page into one record per AmazonOrderId.
-
-        Events without AmazonOrderId are skipped (account-level / non-order).
-        """
-        by_order = {}
-        for list_name, events in financial_events.items():
-            for event in events:
-                order_id = event.get("AmazonOrderId")
-                if not order_id:
-                    continue
-                if order_id not in by_order:
-                    by_order[order_id] = {"AmazonOrderId": order_id}
-                by_order[order_id].setdefault(list_name, []).append(event)
-                posted = event.get("PostedDate")
-                current = by_order[order_id].get("LastUpdateDate")
-                if posted and (not current or posted > current):
-                    by_order[order_id]["LastUpdateDate"] = posted
-        return list(by_order.values())
-
-    @staticmethod
-    def max_posted_date(financial_events: dict) -> Optional[str]:
-        """Return the latest PostedDate across all event lists, if any."""
-        latest = None
-        for events in financial_events.values():
-            for event in events:
-                posted = event.get("PostedDate")
-                if posted and (latest is None or posted > latest):
-                    latest = posted
-        return latest
 
     @staticmethod
     def clamp_to_retention(
@@ -747,9 +689,9 @@ class ListOrderFinancialEventsStream(AmazonSellerStream):
 
     @staticmethod
     def iter_posted_windows(start: datetime, end: datetime, window_days: int = WINDOW_DAYS):
-        """Yield (PostedAfter, PostedBefore) windows of at most window_days.
+        """Yield (postedAfter, postedBefore) windows of at most window_days.
 
-        PostedBefore is exclusive; next window starts at the previous PostedBefore.
+        postedBefore is exclusive; next window starts at the previous postedBefore.
         """
         while start < end:
             window_end = min(start + timedelta(days=window_days), end)
@@ -763,9 +705,9 @@ class ListOrderFinancialEventsStream(AmazonSellerStream):
         factor=2,
         jitter=None,
     )
-    def fetch_financial_events(self, mp, **kwargs):
+    def fetch_transactions(self, mp, **kwargs):
         try:
-            return self.get_sp_finance(mp).list_financial_events(**kwargs)
+            return self.get_sp_finances_v2024(mp).list_transactions(**kwargs)
         except Exception as e:
             raise InvalidResponse(e)
 
@@ -777,20 +719,16 @@ class ListOrderFinancialEventsStream(AmazonSellerStream):
     def _increment_stream_state(self, latest_record, *, context=None):
         """Skip per-record bookmark updates.
 
-        Cursor is the PostedAfter/PostedBefore window, advanced only in
-        ``_advance_bookmark`` after each window finishes. Per-record
-        ``LastUpdateDate`` is unsafe here: ServiceFeeEventList (and similar)
-        often have AmazonOrderId but no PostedDate, so SDK increment would
-        KeyError; even dated rows would race the window cursor mid-page.
-
-        STATE messages still emit; resume is at the last completed window.
+        API does not guarantee postedDate sort within a page. Cursor advances
+        only via ``_advance_bookmark`` after each completed window.
         """
         return
 
     def get_records(self, context: Optional[dict]) -> Iterable[dict]:
         mp = context.get("marketplace_id")
+        marketplace_id = Marketplaces[mp].marketplace_id
         now = datetime.utcnow()
-        # PostedBefore must be >2 minutes before request time.
+        # postedBefore must be >2 minutes before request time.
         end = now - timedelta(minutes=3)
         start = self.get_starting_timestamp(context) or datetime(2000, 1, 1)
         if getattr(start, "tzinfo", None) is not None:
@@ -798,7 +736,7 @@ class ListOrderFinancialEventsStream(AmazonSellerStream):
         clamped = self.clamp_to_retention(start, now, self.RETENTION_DAYS)
         if clamped != start:
             self.logger.warning(
-                "PostedAfter %s is outside Amazon finances retention (%s days); "
+                "postedAfter %s is outside Amazon finances retention (%s days); "
                 "clamping to %s",
                 start.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 self.RETENTION_DAYS,
@@ -811,37 +749,38 @@ class ListOrderFinancialEventsStream(AmazonSellerStream):
         ):
             posted_after = window_start.strftime("%Y-%m-%dT%H:%M:%SZ")
             posted_before = window_end.strftime("%Y-%m-%dT%H:%M:%SZ")
-            page_token = ""
+            next_token = None
             page_num = 0
             while True:
                 page_num += 1
                 kwargs = {
-                    "PostedAfter": posted_after,
-                    "PostedBefore": posted_before,
-                    "MaxResultsPerPage": 100,
+                    "postedAfter": posted_after,
+                    "postedBefore": posted_before,
+                    "marketplaceId": marketplace_id,
                 }
-                if page_token:
-                    kwargs["NextToken"] = page_token
+                if next_token:
+                    kwargs["nextToken"] = next_token
+                page = self.fetch_transactions(mp, **kwargs)
+                payload = page.payload or {}
+                for txn in payload.get("transactions") or []:
+                    yield txn
+
+                next_token = payload.get("nextToken")
+                
                 self.logger.info(
-                    "list_order_financial_events request: "
-                    "PostedAfter=%s PostedBefore=%s page=%s has_next_token=%s",
+                    "list_transactions requested: "
+                    "postedAfter=%s postedBefore=%s marketplaceId=%s page=%s "
+                    "has_next_token=%s",
                     posted_after,
                     posted_before,
+                    marketplace_id,
                     page_num,
-                    bool(page_token),
+                    bool(next_token),
                 )
-                page = self.fetch_financial_events(mp, **kwargs)
-                financial_events = self.filter_order_financial_event_fields(
-                    page.payload["FinancialEvents"]
-                )
-                for record in self.group_financial_events_by_order(financial_events):
-                    yield record
-
-                if not page.next_token:
+                if not next_token:
                     break
-                page_token = page.next_token
-                # Stay near Finances ~0.5 rps; also limits NextToken TTL risk.
-                time.sleep(2)
+                # Stay near Finances ~0.5 rps.
+                # request 500 items, takes around 2 seconds, no need to sleep
 
             # PostedBefore is exclusive; bookmark window_end to avoid gaps/dupes.
             self._advance_bookmark(context, window_end)
