@@ -709,16 +709,34 @@ class ListTransactionsStream(AmazonSellerStream):
         except Exception as e:
             raise InvalidResponse(e)
 
-    def _advance_bookmark(self, context: Optional[dict], when: datetime) -> None:
+    def get_starting_time(self, context, is_inclusive=False):
+        """HotglueSingerSDK-compatible start cursor.
+
+        When ``is_inclusive`` is True (API filter is on-or-after), bump the
+        replication key by 1s so the prior max is not re-fetched.
+        """
+        start_date = None
+        if self.config.get("start_date"):
+            start_date = parse(self.config["start_date"])
+            if getattr(start_date, "tzinfo", None) is not None:
+                start_date = start_date.replace(tzinfo=None)
+        rep_key = self.get_starting_timestamp(context)
+        if rep_key is not None and getattr(rep_key, "tzinfo", None) is not None:
+            rep_key = rep_key.replace(tzinfo=None)
+        if is_inclusive and rep_key is not None:
+            rep_key = rep_key + timedelta(seconds=1)
+        return rep_key or start_date
+
+    def _advance_bookmark(self, context: Optional[dict], posted_date: str) -> None:
         state = self.get_context_state(context)
         state["replication_key"] = self.replication_key
-        state["replication_key_value"] = when.strftime("%Y-%m-%dT%H:%M:%SZ")
+        state["replication_key_value"] = posted_date
 
     def _increment_stream_state(self, latest_record, *, context=None):
         """Skip per-record bookmark updates.
 
         API does not guarantee postedDate sort within a page. Cursor advances
-        only via ``_advance_bookmark`` after each completed window.
+        to max postedDate seen after each window finishes.
         """
         return
 
@@ -728,7 +746,8 @@ class ListTransactionsStream(AmazonSellerStream):
         now = datetime.utcnow()
         # postedBefore must be >2 minutes before request time.
         end = now - timedelta(minutes=3)
-        start = self.get_starting_timestamp(context) or datetime(2000, 1, 1)
+        # postedAfter is inclusive → is_inclusive bumps bookmark by 1s (Hotglue SDK).
+        start = self.get_starting_time(context, is_inclusive=True) or datetime(2000, 1, 1)
         if getattr(start, "tzinfo", None) is not None:
             start = start.replace(tzinfo=None)
         clamped = self.clamp_to_retention(start, now, self.RETENTION_DAYS)
@@ -742,6 +761,7 @@ class ListTransactionsStream(AmazonSellerStream):
             )
             start = clamped
 
+        max_posted = start.strftime("%Y-%m-%dT%H:%M:%SZ")
         for window_start, window_end in self.iter_posted_windows(
             start, end, self.WINDOW_DAYS
         ):
@@ -761,6 +781,9 @@ class ListTransactionsStream(AmazonSellerStream):
                 page = self.fetch_transactions(mp, **kwargs)
                 payload = page.payload or {}
                 for txn in payload.get("transactions") or []:
+                    pd = txn.get("postedDate")
+                    if pd and pd > max_posted:
+                        max_posted = pd
                     yield txn
 
                 next_token = payload.get("nextToken")
@@ -780,8 +803,7 @@ class ListTransactionsStream(AmazonSellerStream):
                 # Stay near Finances ~0.5 rps.
                 # request 500 items, takes around 2 seconds, no need to sleep
 
-            # PostedBefore is exclusive; bookmark window_end to avoid gaps/dupes.
-            self._advance_bookmark(context, window_end)
+            self._advance_bookmark(context, max_posted)
 
 
 class ReportsStream(AmazonSellerStream):
