@@ -608,11 +608,13 @@ class OrderFinancialEvents(AmazonSellerStream):
         th.Property("MarketplaceName", th.StringType)
     ).to_dict()
 
+    # Finances: 0.5 rps / burst 30. factor=2 → 2s, 4s, 8s...; no jitter so we never retry under the refill interval.
     @backoff.on_exception(
         backoff.expo,
         (Exception),
         max_tries=15,
-        factor=3,
+        factor=2,
+        jitter=None,
     )
     @timeout(15)
     def get_records(self, context: Optional[dict]) -> Iterable[dict]:
@@ -633,6 +635,175 @@ class OrderFinancialEvents(AmazonSellerStream):
             return [items["FinancialEvents"]]
         except Exception as e:
             raise InvalidResponse(e)
+
+
+class ListTransactionsStream(AmazonSellerStream):
+    """Finances v2024-06-19 listTransactions (date windows).
+
+    https://developer-docs.amazon/sp-api/reference/listtransactions
+    """
+
+    name = "list_transactions"
+    primary_keys = ["transactionId"]
+    replication_key = "postedDate"
+    parent_stream_type = MarketplacesStream
+    marketplace_id = "{marketplace_id}"
+    # Amazon: window >180 days returns empty; retention >730 days returns InvalidInput.
+    WINDOW_DAYS = 30
+    # "errors": [
+    #     {
+    #         "code": "InvalidInput",
+    #         "message": "Start date cannot be before 2 years from now",
+    #         "details": ""
+    #     }
+    # ]
+    RETENTION_DAYS = 730
+    schema = th.PropertiesList(
+        th.Property("transactionId", th.StringType),
+        th.Property("postedDate", th.DateTimeType),
+        th.Property("transactionType", th.StringType),
+        th.Property("transactionStatus", th.StringType),
+        th.Property("description", th.StringType),
+        th.Property("sellingPartnerMetadata", th.ObjectType()),
+        th.Property("relatedIdentifiers", th.ArrayType(th.ObjectType())),
+        th.Property("totalAmount", th.ObjectType()),
+        th.Property("marketplaceDetails", th.ObjectType()),
+        th.Property("items", th.ArrayType(th.ObjectType())),
+        th.Property("contexts", th.ArrayType(th.ObjectType())),
+        th.Property("breakdowns", th.ArrayType(th.ObjectType())),
+        th.Property("marketplace_id", th.StringType),
+    ).to_dict()
+
+    @staticmethod
+    def clamp_to_retention(
+        start: datetime, now: datetime, retention_days: int = RETENTION_DAYS
+    ) -> datetime:
+        """Raise PostedAfter to the earliest date Amazon still retains.
+
+        Retention is relative to request time (``now``), not PostedBefore.
+        """
+        earliest = now - timedelta(days=retention_days)
+        return start if start >= earliest else earliest
+
+    @staticmethod
+    def iter_posted_windows(start: datetime, end: datetime, window_days: int = WINDOW_DAYS):
+        """Yield (postedAfter, postedBefore) windows of at most window_days.
+
+        postedBefore is exclusive; next window starts at the previous postedBefore.
+        """
+        while start < end:
+            window_end = min(start + timedelta(days=window_days), end)
+            yield start, window_end
+            start = window_end
+
+    @backoff.on_exception(
+        backoff.expo,
+        (Exception,),
+        max_tries=15,
+        factor=2,
+        jitter=None,
+    )
+    def fetch_transactions(self, mp, **kwargs):
+        try:
+            return self.get_sp_finances_v2024(mp).list_transactions(**kwargs)
+        except Exception as e:
+            raise InvalidResponse(e)
+
+    def get_starting_time(self, context, is_inclusive=False):
+        """HotglueSingerSDK-compatible start cursor.
+
+        When ``is_inclusive`` is True (API filter is on-or-after), bump the
+        replication key by 1s so the prior max is not re-fetched.
+        """
+        start_date = None
+        if self.config.get("start_date"):
+            start_date = parse(self.config["start_date"])
+            if getattr(start_date, "tzinfo", None) is not None:
+                start_date = start_date.replace(tzinfo=None)
+        rep_key = self.get_starting_timestamp(context)
+        if rep_key is not None and getattr(rep_key, "tzinfo", None) is not None:
+            rep_key = rep_key.replace(tzinfo=None)
+        if is_inclusive and rep_key is not None:
+            rep_key = rep_key + timedelta(seconds=1)
+        return rep_key or start_date
+
+    def _advance_bookmark(self, context: Optional[dict], posted_date: str) -> None:
+        state = self.get_context_state(context)
+        state["replication_key"] = self.replication_key
+        state["replication_key_value"] = posted_date
+
+    def _increment_stream_state(self, latest_record, *, context=None):
+        """Skip per-record bookmark updates.
+
+        API does not guarantee postedDate sort within a page. Cursor advances
+        to max postedDate seen after each window finishes.
+        """
+        return
+
+    def get_records(self, context: Optional[dict]) -> Iterable[dict]:
+        mp = context.get("marketplace_id")
+        marketplace_id = Marketplaces[mp].marketplace_id
+        now = datetime.utcnow()
+        # postedBefore must be >2 minutes before request time.
+        end = now - timedelta(minutes=3)
+        # postedAfter is inclusive → is_inclusive bumps bookmark by 1s (Hotglue SDK).
+        start = self.get_starting_time(context, is_inclusive=True) or datetime(2000, 1, 1)
+        if getattr(start, "tzinfo", None) is not None:
+            start = start.replace(tzinfo=None)
+        clamped = self.clamp_to_retention(start, now, self.RETENTION_DAYS)
+        if clamped != start:
+            self.logger.warning(
+                "postedAfter %s is outside Amazon finances retention (%s days); "
+                "clamping to %s",
+                start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                self.RETENTION_DAYS,
+                clamped.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            )
+            start = clamped
+
+        max_posted = start.strftime("%Y-%m-%dT%H:%M:%SZ")
+        for window_start, window_end in self.iter_posted_windows(
+            start, end, self.WINDOW_DAYS
+        ):
+            posted_after = window_start.strftime("%Y-%m-%dT%H:%M:%SZ")
+            posted_before = window_end.strftime("%Y-%m-%dT%H:%M:%SZ")
+            next_token = None
+            page_num = 0
+            while True:
+                page_num += 1
+                kwargs = {
+                    "postedAfter": posted_after,
+                    "postedBefore": posted_before,
+                    "marketplaceId": marketplace_id,
+                }
+                if next_token:
+                    kwargs["nextToken"] = next_token
+                page = self.fetch_transactions(mp, **kwargs)
+                payload = page.payload or {}
+                for txn in payload.get("transactions") or []:
+                    pd = txn.get("postedDate")
+                    if pd and pd > max_posted:
+                        max_posted = pd
+                    yield txn
+
+                next_token = payload.get("nextToken")
+
+                self.logger.info(
+                    "list_transactions requested: "
+                    "postedAfter=%s postedBefore=%s marketplaceId=%s page=%s "
+                    "has_next_token=%s",
+                    posted_after,
+                    posted_before,
+                    marketplace_id,
+                    page_num,
+                    bool(next_token),
+                )
+                if not next_token:
+                    break
+                # Stay near Finances ~0.5 rps.
+                # request 500 items, takes around 2 seconds, no need to sleep
+
+            self._advance_bookmark(context, max_posted)
 
 
 class ReportsStream(AmazonSellerStream):
