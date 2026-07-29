@@ -889,8 +889,16 @@ class ReportsStream(AmazonSellerStream):
                 for report_row in reports:
                     yield report_row
 
+        except SellingApiForbiddenException as e:
+            self.logger.error(
+                f"Unauthorized: access to report types '{report_types}' is forbidden. "
+                f"Check SP-API permissions/roles. {type(e).__name__}: {e}"
+            )
+            raise InvalidResponse(f"Unauthorized for report types '{report_types}': {type(e).__name__}: {e}") from None
+
         except Exception as e:
-            raise InvalidResponse(e)
+            self.logger.error(f"Error syncing stream '{self.name}': {type(e).__name__}: {e}")
+            raise InvalidResponse(f"{type(e).__name__}: {e}") from None
 
 
 class WarehouseInventory(AmazonSellerStream):
