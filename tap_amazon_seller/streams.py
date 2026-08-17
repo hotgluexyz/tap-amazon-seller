@@ -658,6 +658,8 @@ class ListTransactionsStream(AmazonSellerStream):
     #     }
     # ]
     RETENTION_DAYS = 730
+    # Amazon rejects postedAfter exactly at now - 730 days; +1h is the minimum buffer observed.
+    RETENTION_BUFFER_HOURS = 1
     schema = th.PropertiesList(
         th.Property("transactionId", th.StringType),
         th.Property("postedDate", th.DateTimeType),
@@ -676,13 +678,17 @@ class ListTransactionsStream(AmazonSellerStream):
 
     @staticmethod
     def clamp_to_retention(
-        start: datetime, now: datetime, retention_days: int = RETENTION_DAYS
+        start: datetime,
+        now: datetime,
+        retention_days: int = RETENTION_DAYS,
+        buffer_hours: int = RETENTION_BUFFER_HOURS,
     ) -> datetime:
         """Raise PostedAfter to the earliest date Amazon still retains.
 
         Retention is relative to request time (``now``), not PostedBefore.
+        Amazon treats the 2-year boundary as exclusive; add ``buffer_hours``.
         """
-        earliest = now - timedelta(days=retention_days)
+        earliest = now - timedelta(days=retention_days) + timedelta(hours=buffer_hours)
         return start if start >= earliest else earliest
 
     @staticmethod
