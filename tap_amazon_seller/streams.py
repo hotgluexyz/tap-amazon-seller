@@ -7,6 +7,7 @@ from singer_sdk import typing as th
 from sp_api.util import load_all_pages
 
 from tap_amazon_seller.client import AmazonSellerStream
+from tap_amazon_seller.exceptions import InvalidReportParameter, PermissionError
 from tap_amazon_seller.utils import InvalidResponse, timeout
 from sp_api.base.exceptions import SellingApiServerException,SellingApiNotFoundException, SellingApiBadRequestException
 from dateutil.relativedelta import relativedelta
@@ -31,6 +32,21 @@ class MarketplacesStream(AmazonSellerStream):
         return {
             "marketplace_id": record["id"],
         }
+
+    def _sync_children(self, child_context: dict) -> None:
+        """Sync child streams, skipping partitions that fail with permanent errors."""
+        for child_stream in self.child_streams:
+            if not (child_stream.selected or child_stream.has_selected_descendents):
+                continue
+            try:
+                child_stream.sync(context=child_context)
+            except (PermissionError, InvalidReportParameter, InvalidResponse) as exc:
+                self.logger.warning(
+                    "Skipping stream '%s' for partition %s: %s",
+                    child_stream.name,
+                    child_context,
+                    exc,
+                )
 
     @backoff.on_exception(
         backoff.expo,

@@ -6,6 +6,12 @@ from typing import List
 from singer_sdk import Stream, Tap
 from singer_sdk import typing as th  # JSON schema typing helpers
 
+from tap_amazon_seller.replenishment_streams import (
+    ReplenishmentDailyMetricsStream,
+    ReplenishmentOfferForecastStream,
+    ReplenishmentOfferMetricsStream,
+    ReplenishmentRollingMetricsStream,
+)
 from tap_amazon_seller.streams import (
     AmazonSellerStream,
     MarketplacesStream,
@@ -50,7 +56,11 @@ STREAM_TYPES = [
     FBACustomerShipmentSalesReportStream,
     ProductDetailsV2Stream,
     AWDInventoryStream,
-    AccountStream
+    AccountStream,
+    ReplenishmentDailyMetricsStream,
+    ReplenishmentRollingMetricsStream,
+    ReplenishmentOfferMetricsStream,
+    ReplenishmentOfferForecastStream,
 ]
 
 
