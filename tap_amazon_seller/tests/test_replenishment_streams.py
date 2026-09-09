@@ -34,7 +34,7 @@ def stream(tap):
 
 
 def test_parse_report_end_date(stream):
-    assert stream.parse_report_end_date({"endDate": "2026-05-31T00:00:00Z"}) == "2026-05-31"
+    assert stream.parse_report_end_date({"endDate": "2026-05-31T00:00:00Z"}) == "2026-05-31T00:00:00Z"
     assert stream.parse_report_end_date({}) is None
 
 

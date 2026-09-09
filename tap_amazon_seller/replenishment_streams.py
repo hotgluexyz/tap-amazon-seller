@@ -166,7 +166,7 @@ class ReplenishmentStreamBase(AmazonSellerStream):
         """Parse report_end_date from a Replenishment timeInterval."""
         if not time_interval or not time_interval.get("endDate"):
             return None
-        return parse(time_interval["endDate"]).date().isoformat()
+        return parse(time_interval["endDate"]).strftime("%Y-%m-%dT00:00:00Z")
 
     @staticmethod
     def parse_interval_bounds(time_interval: Optional[dict]) -> Tuple[Optional[str], Optional[str]]:
@@ -387,7 +387,13 @@ class ReplenishmentOfferMetricsStream(OfferMetricsStreamBase):
     """Per-ASIN daily Subscribe & Save offer metrics (PERFORMANCE)."""
 
     name = "replenishment_offer_metrics"
-    primary_keys = ["marketplace_id", "asin", "report_end_date"]
+    primary_keys = [
+        "marketplace_id",
+        "asin",
+        "sku",
+        "fulfillmentChannelType",
+        "report_end_date",
+    ]
     replication_key = "report_end_date"
 
     schema = th.PropertiesList(
@@ -436,7 +442,7 @@ class ReplenishmentOfferForecastStream(OfferMetricsStreamBase):
     """Per-ASIN forward-looking Subscribe & Save offer projections (FORECAST)."""
 
     name = "replenishment_offer_forecast"
-    primary_keys = ["marketplace_id", "asin"]
+    primary_keys = ["marketplace_id", "asin", "sku", "fulfillmentChannelType"]
     replication_key = None
 
     schema = th.PropertiesList(
