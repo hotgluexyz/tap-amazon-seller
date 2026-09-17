@@ -1933,3 +1933,162 @@ class FBACustomerShipmentSalesReportStream(AmazonSellerStream):
 
         except Exception as e:
             raise InvalidResponse(e)
+
+class FBAAmazonFulfilledShipmentsReportStream(AmazonSellerStream):
+    """Define custom stream."""
+
+    name = "fba_amazon_fulfilled_shipments"
+    primary_keys = None
+    replication_key = "shipment-date"
+    report_id = None
+    document_id = None
+    correct_end_date_minus_days = 2 #EU has upto 24 hour delay in updates
+    schema = th.PropertiesList(
+        th.Property("amazon-order-id", th.StringType),
+        th.Property("merchant-order-id", th.StringType),
+        th.Property("shipment-id", th.StringType),
+        th.Property("shipment-item-id", th.StringType),
+        th.Property("amazon-order-item-id", th.StringType),
+        th.Property("merchant-order-item-id", th.StringType),
+        th.Property("purchase-date", th.DateTimeType),
+        th.Property("payments-date", th.DateTimeType),
+        th.Property("shipment-date", th.DateTimeType),
+        th.Property("reporting-date", th.DateTimeType),
+        th.Property("buyer-email", th.StringType),
+        th.Property("buyer-name", th.StringType),
+        th.Property("buyer-phone-number", th.StringType),
+        th.Property("sku", th.StringType),
+        th.Property("product-name", th.StringType),
+        th.Property("quantity-shipped", th.StringType),
+        th.Property("currency", th.StringType),
+        th.Property("item-price", th.StringType),
+        th.Property("item-tax", th.StringType),
+        th.Property("shipping-price", th.StringType),
+        th.Property("shipping-tax", th.StringType),
+        th.Property("gift-wrap-price", th.StringType),
+        th.Property("gift-wrap-tax", th.StringType),
+        th.Property("ship-service-level", th.StringType),
+        th.Property("recipient-name", th.StringType),
+        th.Property("ship-address-1", th.StringType),
+        th.Property("ship-address-2", th.StringType),
+        th.Property("ship-address-3", th.StringType),
+        th.Property("ship-city", th.StringType),
+        th.Property("ship-state", th.StringType),
+        th.Property("ship-postal-code", th.StringType),
+        th.Property("ship-country", th.StringType),
+        th.Property("ship-phone-number", th.StringType),
+        th.Property("bill-address-1", th.StringType),
+        th.Property("bill-address-2", th.StringType),
+        th.Property("bill-address-3", th.StringType),
+        th.Property("bill-city", th.StringType),
+        th.Property("bill-state", th.StringType),
+        th.Property("bill-postal-code", th.StringType),
+        th.Property("bill-country", th.StringType),
+        th.Property("item-promotion-discount", th.StringType),
+        th.Property("ship-promotion-discount", th.StringType),
+        th.Property("carrier", th.StringType),
+        th.Property("tracking-number", th.StringType),
+        th.Property("estimated-arrival-date", th.DateTimeType),
+        th.Property("fulfillment-center-id", th.StringType),
+        th.Property("fulfillment-channel", th.StringType),
+        th.Property("sales-channel", th.StringType),
+        th.Property("reportId", th.StringType),
+        th.Property("report_end_date", th.DateTimeType),
+    ).to_dict()
+
+    def correct_end_date(self, end_date, start_date, max_fetch_date):
+        if end_date > max_fetch_date:
+            end_date = max_fetch_date
+
+        if end_date <= start_date:
+            end_date = start_date
+        return end_date
+
+    @backoff.on_exception(
+        backoff.expo,
+        (Exception),
+        max_tries=10,
+        factor=5,
+    )
+    def _fetch_reports_list(
+        self, report, report_types, processing_status, start_date_f, end_date_f
+    ):
+        return self.get_reports_list(
+            report, report_types, processing_status, start_date_f, end_date_f
+        )
+
+    # @timeout(15)
+    def get_records(self, context: Optional[dict]) -> Iterable[dict]:
+        try:
+            start_date = self.get_starting_timestamp(context)
+            if start_date:
+                # Remove timezone info from replication date so we can compare it with other dates.
+                start_date = start_date.replace(tzinfo=None)
+            end_date = None
+            if self.config.get("start_date") and not start_date:
+                start_date = parse(self.config.get("start_date")).replace(tzinfo=None)
+            # We can only do look back of maximum two years in this report type
+            days_look_back = 545  # Few days less than 18 months
+            current_date = datetime.now()
+            max_fetch_date = current_date - timedelta(days=self.correct_end_date_minus_days)
+            minimum_start_date = current_date - timedelta(days=days_look_back)
+            if start_date < minimum_start_date:
+                # Reset start date to days limit if it is greater than days_look_back days
+                start_date = current_date - timedelta(days=days_look_back)
+
+            if start_date > max_fetch_date:
+                self.logger.info(
+                    f"No new data to fetch for {self.name}. "
+                    f"Next window starts {start_date.date()}, "
+                    f"latest available through {max_fetch_date.date()}."
+                )
+                return None
+
+            end_date = start_date + timedelta(days=30)
+            end_date = self.correct_end_date(end_date, start_date, max_fetch_date)
+            report_type = "GET_AMAZON_FULFILLED_SHIPMENTS_DATA_GENERAL"
+            report_types = [report_type]
+            processing_status = self.config.get("processing_status")
+            # Get list of valid marketplaces
+
+            marketplace_id = None
+            if context is not None:
+                marketplace_id = context.get("marketplace_id")
+
+            report = self.get_sp_reports(marketplace_id=marketplace_id)
+            while start_date <= max_fetch_date:
+                start_date_f = start_date.strftime("%Y-%m-%dT00:00:00")
+                end_date_f = end_date.strftime("%Y-%m-%dT23:59:59")
+                items = self._fetch_reports_list(
+                    report, report_types, processing_status, start_date_f, end_date_f
+                )
+
+                if not items["reports"]:
+                    self.logger.info(f"Creating new report. StartDate:{start_date_f}, EndDate: {end_date_f}, ReportName:{self.name}")
+                    reports = self.create_report(
+                        start_date_f,
+                        report,
+                        end_date_f,
+                        report_type,
+                    )
+                    if not reports:
+                        return None
+                    for row in reports:
+                        row.update({"report_end_date": end_date.isoformat()})
+                        yield row
+
+                # If reports are form loop through, download documents and populate the data.txt
+                for row in items["reports"]:
+                    reports = self.check_report(row["reportId"], report)
+                    for report_row in reports:
+                        report_row.update({"report_end_date": end_date.isoformat()})
+                        yield report_row
+                # Move to the next time period
+                start_date = end_date + timedelta(days=1)
+                end_date += timedelta(days=30)
+                end_date = self.correct_end_date(end_date, start_date, max_fetch_date)
+                # According to Amazon, spamming bad is, wait for it, good you should - Yoda's lesson of the day!
+                time.sleep(60)
+
+        except Exception as e:
+            raise InvalidResponse(e)
