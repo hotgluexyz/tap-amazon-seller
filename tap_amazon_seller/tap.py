@@ -11,8 +11,8 @@ def _apply_sandbox_env_from_argv() -> None:
     """Set AWS_ENV=SANDBOX before sp_api is imported if the config file requests it.
 
     sp_api reads AWS_ENV at import time, so this must run before the streams
-    import below. Errors reading the file are intentionally ignored here —
-    they will surface as proper exceptions when the SDK validates the config.
+    import below. Errors reading the file are ignored here and surface later
+    when the SDK validates the config.
     """
     for i, arg in enumerate(sys.argv):
         if arg != "--config" or i + 1 >= len(sys.argv):

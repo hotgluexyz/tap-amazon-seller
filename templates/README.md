@@ -40,7 +40,7 @@ Default marketplace ID when a single marketplace is used. Used when `marketplace
 - **Example**: `"US"`, `"CA"`, `"GB"`, `"DE"`, `"JP"`
 
 #### `marketplaces` (array of strings, optional)
-List of marketplace IDs to sync. If provided, the tap syncs data for each marketplace in the list. If omitted, the tap uses `marketplace` (default `"US"`) or all supported marketplaces depending on stream logic.
+List of marketplace country codes to sync. Only marketplaces the seller account participates in are synced. If omitted, the tap syncs every marketplace the seller account participates in.
 - **Example**: `["US", "CA", "GB", "DE"]`
 
 ---

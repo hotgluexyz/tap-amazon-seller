@@ -151,11 +151,6 @@ class AmazonSellerStream(Stream):
             credentials=self.get_credentials(), marketplace=Marketplaces[marketplace_id]
         )
 
-    def get_order_v2(self, order_id, marketplace_id, included_data):
-        client = self.get_sp_orders_v2(marketplace_id)
-        payload = client.get_order(order_id, includedData=included_data).payload
-        return payload.get("order", payload)
-
     def get_sp_sellers(self):
         return Sellers(credentials=self.get_credentials())
 
@@ -370,24 +365,28 @@ class AmazonSellerStream(Stream):
         )
 
     def get_valid_marketplaces(self):
-        sellers = self.get_sp_sellers()
-        participations = sellers.get_marketplace_participation().payload
+        """Return {id: country code, name} for each marketplace the seller participates in.
+
+        Limited to the country codes in the `marketplaces` config when set.
+        """
+        participations = self.get_sp_sellers().get_marketplace_participation().payload
         configured = self.config.get("marketplaces")
         if isinstance(configured, str):
-            configured = [c.strip() for c in configured.split(",")]
-        country_codes = set(configured) if configured else None
-        canonical_ids = {m.marketplace_id for m in Marketplaces}
+            configured = [code.strip() for code in configured.split(",")]
+        supported_ids = {marketplace.marketplace_id for marketplace in Marketplaces}
 
         valid = []
         for entry in participations:
-            if not entry.get("participation", {}).get("isParticipating"):
+            marketplace = entry["marketplace"]
+            if not entry["participation"]["isParticipating"]:
                 continue
-            mp = entry.get("marketplace", {})
-            if mp.get("id") not in canonical_ids:
+            if marketplace["id"] not in supported_ids:
                 continue
-            code = mp.get("countryCode")
-            if country_codes is None or code in country_codes:
-                valid.append({"id": code, "name": mp.get("name")})
+            if configured and marketplace["countryCode"] not in configured:
+                continue
+            valid.append(
+                {"id": marketplace["countryCode"], "name": marketplace["name"]}
+            )
         return valid
 
     @backoff.on_exception(

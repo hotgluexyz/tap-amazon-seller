@@ -2,7 +2,7 @@
 import time
 import urllib.parse
 from datetime import datetime, timedelta
-from typing import Iterable, Optional, Tuple, Union
+from typing import Iterable, Optional, Tuple
 
 import backoff
 from dateutil.parser import parse
@@ -16,6 +16,7 @@ from tap_amazon_seller.exceptions import InvalidReportParameter, PermissionError
 from tap_amazon_seller.orders_transform import (
     ORDER_V2_CONTEXT_KEY,
     SANDBOX_V2,
+    OrderPayload,
     build_search_included_data,
     order_v2_from_child_context,
     transform_order_address_v2_to_v0,
@@ -24,6 +25,9 @@ from tap_amazon_seller.orders_transform import (
     transform_order_v2_to_v0,
 )
 from tap_amazon_seller.utils import InvalidResponse, timeout
+
+SEARCH_DATE_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
 
 class MarketplacesStream(AmazonSellerStream):
     """Define custom stream."""
@@ -221,6 +225,28 @@ class OrdersStream(AmazonSellerStream):
         ]
         return build_search_included_data(selected_children)
 
+    def _sandbox_order_pages(self):
+        """Order pages for the sandbox, which only serves a fixed JP sample order."""
+        return self.load_order_page(
+            mp=SANDBOX_V2.marketplace,
+            sandbox=True,
+            createdAfter=SANDBOX_V2.created_after,
+            marketplaceIds=[SANDBOX_V2.marketplace_id],
+            includedData=SANDBOX_V2.included_data,
+        )
+
+    def _order_pages(self, marketplace_id, context):
+        """Order pages updated inside the sync window for one marketplace."""
+        start_date = self.get_starting_timestamp(context) or datetime(2000, 1, 1)
+        search_kwargs = {
+            "lastUpdatedAfter": start_date.strftime(SEARCH_DATE_FORMAT),
+            "includedData": self._search_included_data_for_catalog(),
+        }
+        if self.config.get("end_date"):
+            end_date = parse(self.config["end_date"])
+            search_kwargs["lastUpdatedBefore"] = end_date.strftime(SEARCH_DATE_FORMAT)
+        return self.load_order_page(mp=marketplace_id, **search_kwargs)
+
     @backoff.on_exception(
         backoff.expo,
         (Exception),
@@ -229,42 +255,17 @@ class OrdersStream(AmazonSellerStream):
     )
     def get_records(
         self, context: Optional[dict]
-    ) -> Iterable[Union[dict, Tuple[dict, dict]]]:
-        """Yield v0 order rows and per-row child context with the raw v2 order payload.
+    ) -> Iterable[Tuple[dict, dict]]:
+        """Yield v0 order rows, each with a child context carrying the raw v2 order.
 
-        Singer SDK accepts (record, child_context) tuples from get_records; see
-        singer_sdk.streams.core.Stream._sync_records. Child streams receive
-        order_v2 via get_child_context without a separate get_order call.
+        The Singer SDK accepts (record, child_context) tuples, so the child
+        streams build their rows from the order without calling the API again.
         """
-        start_date = self.get_starting_timestamp(context) or datetime(2000, 1, 1)
-        start_date = start_date.strftime("%Y-%m-%dT%H:%M:%SZ")
-        end_date = None
-        if self.config.get("end_date"):
-            end_date = parse(self.config.get("end_date"))
-            end_date = end_date.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-        marketplace_id = context.get("marketplace_id") if context else None
-        sandbox = self.config.get("sandbox", False)
-        if sandbox is True:
-            search_kwargs = {
-                "createdAfter": SANDBOX_V2.created_after,
-                "marketplaceIds": [SANDBOX_V2.marketplace_id],
-                "includedData": SANDBOX_V2.included_data,
-            }
-            pages = self.load_order_page(
-                mp=SANDBOX_V2.marketplace,
-                sandbox=True,
-                **search_kwargs,
-            )
+        marketplace_id = context["marketplace_id"]
+        if self.config.get("sandbox", False):
+            pages = self._sandbox_order_pages()
         else:
-            included = self._search_included_data_for_catalog()
-            search_kwargs = {"lastUpdatedAfter": start_date, "includedData": included}
-            if end_date:
-                search_kwargs["lastUpdatedBefore"] = end_date
-            pages = self.load_order_page(
-                mp=marketplace_id,
-                **search_kwargs,
-            )
+            pages = self._order_pages(marketplace_id, context)
 
         for order_page in pages:
             for order_v2 in order_page:
@@ -272,19 +273,9 @@ class OrdersStream(AmazonSellerStream):
                 child_context = {
                     "AmazonOrderId": record["AmazonOrderId"],
                     "marketplace_id": marketplace_id,
-                    ORDER_V2_CONTEXT_KEY: order_v2,
+                    ORDER_V2_CONTEXT_KEY: OrderPayload(order_v2),
                 }
                 yield record, child_context
-
-    def get_child_context(self, record: dict, context: Optional[dict]) -> dict:
-        """Partition keys and optional v2 order for child streams (see get_records tuples)."""
-        if not context:
-            return {"AmazonOrderId": record["AmazonOrderId"]}
-        return {
-            "AmazonOrderId": record["AmazonOrderId"],
-            "marketplace_id": context.get("marketplace_id"),
-            ORDER_V2_CONTEXT_KEY: context.get(ORDER_V2_CONTEXT_KEY),
-        }
 
 
 class OrderItemsStream(AmazonSellerStream):
