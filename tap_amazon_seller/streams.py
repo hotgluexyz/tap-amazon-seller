@@ -2,7 +2,7 @@
 import time
 import urllib.parse
 from datetime import datetime, timedelta
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Tuple, Union
 
 import backoff
 from dateutil.parser import parse
@@ -14,7 +14,10 @@ from sp_api.util import load_all_pages
 from tap_amazon_seller.client import AmazonSellerStream
 from tap_amazon_seller.exceptions import InvalidReportParameter, PermissionError
 from tap_amazon_seller.orders_transform import (
+    ORDER_V2_CONTEXT_KEY,
     SANDBOX_V2,
+    build_search_included_data,
+    order_v2_from_child_context,
     transform_order_address_v2_to_v0,
     transform_order_buyer_info_v2_to_v0,
     transform_order_items_v2_to_v0,
@@ -201,20 +204,22 @@ class OrdersStream(AmazonSellerStream):
         return orders.search_orders(**kwargs)
 
     def load_order_page(self, mp, sandbox=False, **kwargs):
+        """Yield each page of raw v2026-01-01 order dicts from search_orders."""
         if sandbox:
             page = self._load_orders_single_page(mp, **kwargs)
-            orders = [
-                transform_order_v2_to_v0(o)
-                for o in page.payload.get("orders", [])
-            ]
-            yield orders
+            yield page.payload.get("orders", [])
         else:
             for page in self._load_all_orders_paginated(mp, **kwargs):
-                orders = [
-                    transform_order_v2_to_v0(o)
-                    for o in page.payload.get("orders", [])
-                ]
-                yield orders
+                yield page.payload.get("orders", [])
+
+    def _search_included_data_for_catalog(self):
+        """includedData for search_orders: base fields plus tokens for selected children."""
+        selected_children = [
+            child.name
+            for child in self.child_streams
+            if child.selected or child.has_selected_descendents
+        ]
+        return build_search_included_data(selected_children)
 
     @backoff.on_exception(
         backoff.expo,
@@ -222,7 +227,15 @@ class OrdersStream(AmazonSellerStream):
         max_tries=10,
         factor=3,
     )
-    def get_records(self, context: Optional[dict]) -> Iterable[dict]:
+    def get_records(
+        self, context: Optional[dict]
+    ) -> Iterable[Union[dict, Tuple[dict, dict]]]:
+        """Yield v0 order rows and per-row child context with the raw v2 order payload.
+
+        Singer SDK accepts (record, child_context) tuples from get_records; see
+        singer_sdk.streams.core.Stream._sync_records. Child streams receive
+        order_v2 via get_child_context without a separate get_order call.
+        """
         start_date = self.get_starting_timestamp(context) or datetime(2000, 1, 1)
         start_date = start_date.strftime("%Y-%m-%dT%H:%M:%SZ")
         end_date = None
@@ -230,38 +243,48 @@ class OrdersStream(AmazonSellerStream):
             end_date = parse(self.config.get("end_date"))
             end_date = end_date.strftime("%Y-%m-%dT%H:%M:%SZ")
 
+        marketplace_id = context.get("marketplace_id") if context else None
         sandbox = self.config.get("sandbox", False)
         if sandbox is True:
-            rows = self.load_order_page(
+            search_kwargs = {
+                "createdAfter": SANDBOX_V2.created_after,
+                "marketplaceIds": [SANDBOX_V2.marketplace_id],
+                "includedData": SANDBOX_V2.included_data,
+            }
+            pages = self.load_order_page(
                 mp=SANDBOX_V2.marketplace,
                 sandbox=True,
-                createdAfter=SANDBOX_V2.created_after,
-                marketplaceIds=[SANDBOX_V2.marketplace_id],
-                includedData=SANDBOX_V2.included_data,
+                **search_kwargs,
             )
         else:
-            included = ["FULFILLMENT", "PROCEEDS"]
-            if start_date and end_date:
-                rows = self.load_order_page(
-                    mp=context.get("marketplace_id"),
-                    lastUpdatedAfter=start_date,
-                    lastUpdatedBefore=end_date,
-                    includedData=included,
-                )
-            else:
-                rows = self.load_order_page(
-                    mp=context.get("marketplace_id"),
-                    lastUpdatedAfter=start_date,
-                    includedData=included,
-                )
-        for row in rows:
-            for item in row:
-                yield item
+            included = self._search_included_data_for_catalog()
+            search_kwargs = {"lastUpdatedAfter": start_date, "includedData": included}
+            if end_date:
+                search_kwargs["lastUpdatedBefore"] = end_date
+            pages = self.load_order_page(
+                mp=marketplace_id,
+                **search_kwargs,
+            )
+
+        for order_page in pages:
+            for order_v2 in order_page:
+                record = transform_order_v2_to_v0(order_v2)
+                child_context = {
+                    "AmazonOrderId": record["AmazonOrderId"],
+                    "marketplace_id": marketplace_id,
+                    ORDER_V2_CONTEXT_KEY: order_v2,
+                }
+                yield record, child_context
 
     def get_child_context(self, record: dict, context: Optional[dict]) -> dict:
-        """Return a context dictionary for child streams."""
-        mp = context.get("marketplace_id")
-        return {"AmazonOrderId": record["AmazonOrderId"], "marketplace_id": mp}
+        """Partition keys and optional v2 order for child streams (see get_records tuples)."""
+        if not context:
+            return {"AmazonOrderId": record["AmazonOrderId"]}
+        return {
+            "AmazonOrderId": record["AmazonOrderId"],
+            "marketplace_id": context.get("marketplace_id"),
+            ORDER_V2_CONTEXT_KEY: context.get(ORDER_V2_CONTEXT_KEY),
+        }
 
 
 class OrderItemsStream(AmazonSellerStream):
@@ -372,13 +395,7 @@ class OrderItemsStream(AmazonSellerStream):
 
         self.state_partitioning_keys = self.partitions[len(self.partitions) - 1]
         self.logger.info(f"Requesting orderitems for order with AmazonOrderId {order_id}")
-        sandbox = self.config.get("sandbox", False)
-        mp = SANDBOX_V2.marketplace if sandbox else context.get("marketplace_id")
-        order = self.get_order_v2(
-            order_id,
-            mp,
-            included_data=["FULFILLMENT", "PROCEEDS", "EXPENSE", "PROMOTION", "CANCELLATION"],
-        )
+        order = order_v2_from_child_context(context)
         return [transform_order_items_v2_to_v0(order)]
 
 
@@ -412,9 +429,7 @@ class OrderBuyerInfo(AmazonSellerStream):
         order_id = context.get("AmazonOrderId", [])
 
         self.logger.info(f"Requesting orderbuyerinfo for order with AmazonOrderId {order_id}")
-        sandbox = self.config.get("sandbox", False)
-        mp = SANDBOX_V2.marketplace if sandbox else context.get("marketplace_id")
-        order = self.get_order_v2(order_id, mp, included_data=["BUYER"])
+        order = order_v2_from_child_context(context)
         return [transform_order_buyer_info_v2_to_v0(order)]
 
 
@@ -461,9 +476,7 @@ class OrderAddress(AmazonSellerStream):
         order_id = context.get("AmazonOrderId", [])
 
         self.logger.info(f"Requesting orderaddress for order with AmazonOrderId {order_id}")
-        sandbox = self.config.get("sandbox", False)
-        mp = SANDBOX_V2.marketplace if sandbox else context.get("marketplace_id")
-        order = self.get_order_v2(order_id, mp, included_data=["RECIPIENT", "BUYER"])
+        order = order_v2_from_child_context(context)
         return [transform_order_address_v2_to_v0(order)]
 
 

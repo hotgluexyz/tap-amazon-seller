@@ -27,6 +27,44 @@ SANDBOX_V2 = SimpleNamespace(
     ],
 )
 
+# Child stream context key: raw v2026-01-01 order from parent search_orders (not emitted to Singer).
+ORDER_V2_CONTEXT_KEY = "order_v2"
+
+# Minimum includedData for the orders stream transform (order header + line proceeds).
+SEARCH_INCLUDED_DATA_BASE = ["FULFILLMENT", "PROCEEDS"]
+
+# Additional search_orders includedData tokens when a child stream is selected in the catalog.
+SEARCH_INCLUDED_DATA_BY_CHILD_STREAM = {
+    "orderitems": ["EXPENSE", "PROMOTION", "CANCELLATION"],
+    "orderbuyerinfo": ["BUYER"],
+    "orderaddress": ["RECIPIENT"],
+}
+
+
+def build_search_included_data(selected_child_stream_names):
+    """Build the includedData list for search_orders from selected order child streams."""
+    included = set(SEARCH_INCLUDED_DATA_BASE)
+    for name in selected_child_stream_names:
+        for token in SEARCH_INCLUDED_DATA_BY_CHILD_STREAM.get(name, ()):
+            included.add(token)
+    return sorted(included)
+
+
+def order_v2_from_child_context(context):
+    """Return the v2026-01-01 order dict passed from OrdersStream via child context."""
+    if not context:
+        raise RuntimeError(
+            "order child streams require parent context from orders; "
+            f"missing {ORDER_V2_CONTEXT_KEY}"
+        )
+    order = context.get(ORDER_V2_CONTEXT_KEY)
+    if order is None:
+        raise RuntimeError(
+            f"Child stream context is missing {ORDER_V2_CONTEXT_KEY}; "
+            "ensure orders sync runs with widened search_orders includedData."
+        )
+    return order
+
 
 def transform_order_v2_to_v0(order: dict) -> dict:
     """Transform an order from the v2026-01-01 format to the v0 schema."""
