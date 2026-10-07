@@ -1,20 +1,33 @@
 """Stream type classes for tap-amazon-seller."""
+import time
+import urllib.parse
 from datetime import datetime, timedelta
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Tuple
 
 import backoff
+from dateutil.parser import parse
+from dateutil.relativedelta import relativedelta
 from singer_sdk import typing as th
+from sp_api.base.exceptions import SellingApiBadRequestException, SellingApiNotFoundException
 from sp_api.util import load_all_pages
 
 from tap_amazon_seller.client import AmazonSellerStream
 from tap_amazon_seller.exceptions import InvalidReportParameter, PermissionError
+from tap_amazon_seller.orders_transform import (
+    ORDER_V2_CONTEXT_KEY,
+    SANDBOX_V2,
+    OrderPayload,
+    build_search_included_data,
+    order_v2_from_child_context,
+    transform_order_address_v2_to_v0,
+    transform_order_buyer_info_v2_to_v0,
+    transform_order_items_v2_to_v0,
+    transform_order_v2_to_v0,
+)
 from tap_amazon_seller.utils import InvalidResponse, timeout
-from sp_api.base.exceptions import SellingApiServerException,SellingApiNotFoundException, SellingApiBadRequestException
-from dateutil.relativedelta import relativedelta
-from sp_api.base import Marketplaces
-from dateutil.parser import parse
-import time
-import urllib.parse
+
+SEARCH_DATE_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
 
 class MarketplacesStream(AmazonSellerStream):
     """Define custom stream."""
@@ -56,52 +69,11 @@ class MarketplacesStream(AmazonSellerStream):
     )
     @timeout(15)
     def get_records(self, context: Optional[dict]) -> Iterable[dict]:
-        if self.config.get("marketplaces"):
-            marketplaces = self.config.get("marketplaces")
-            if isinstance(marketplaces, str):
-                marketplaces = marketplaces.split(",")
-        else:
-            marketplaces = [
-                "US",
-                "CA",
-                "MX",
-                "BR",
-                "ES",
-                "GB",
-                "FR",
-                "NL",
-                "DE",
-                "IT",
-                "SE",
-                "PL",
-                "EG",
-                "TR",
-                "SA",
-                "AE",
-                "IN",
-                "SG",
-                "AU",
-                "JP",
-            ]
-        # orders = self.get_sp_orders()
-        # Fetch minimum number of orders and verify credentials are working
-        today_date = datetime.today().strftime("%Y-%m-%d")
-        for mp in marketplaces:
-            try:
-                orders = self.get_sp_orders(mp)
-                sandbox = self.config.get("sandbox", False)
-                if sandbox is True:
-                    allorders = orders.get_orders(CreatedAfter="TEST_CASE_200")
-                else:
-                    allorders = orders.get_orders(CreatedAfter=today_date)
-                yield {"id": mp}
-                if sandbox is True:
-                    # Since all sandbox orders are same and we found a valid marketplace. Break the loop.
-                    break
-            except Exception as e:
-                if "invalid grant parameter" in e.message:
-                    raise Exception(e.message)
-                self.logger.info(f"marketplace {mp} not part of current SP account")
+        sandbox = self.config.get("sandbox", False)
+        for mp in self.get_valid_marketplaces():
+            yield mp
+            if sandbox:
+                break
 
 
 class OrdersStream(AmazonSellerStream):
@@ -196,7 +168,7 @@ class OrdersStream(AmazonSellerStream):
         ),
     ).to_dict()
 
-    @load_all_pages()
+    @load_all_pages(next_token_param="paginationToken")
     @backoff.on_exception(
         backoff.expo,
         (Exception),
@@ -204,13 +176,10 @@ class OrdersStream(AmazonSellerStream):
         factor=3,
     )
     @timeout(15)
-    def load_all_orders(self, mp, **kwargs):
-        """
-        a generator function to return all pages, obtained by NextToken
-        """
-        orders = self.get_sp_orders(mp)
+    def _load_all_orders_paginated(self, mp, **kwargs):
+        orders = self.get_sp_orders_v2(mp)
         try:
-            orders_obj = orders.get_orders(**kwargs)
+            orders_obj = orders.search_orders(**kwargs)
             self.backoff_retries = 0
         except SellingApiBadRequestException as e:
             if self.backoff_retries >= 3:
@@ -219,7 +188,7 @@ class OrdersStream(AmazonSellerStream):
                 )
                 self.backoff_retries = 0
                 return type(
-                    "Page", (), {"payload": {"Orders": []}, "next_token": None}
+                    "Page", (), {"payload": {"orders": []}, "next_token": None}
                 )()
             else:
                 self.backoff_retries += 1
@@ -227,17 +196,56 @@ class OrdersStream(AmazonSellerStream):
                 raise e
         return orders_obj
 
-    def load_order_page(self, mp, **kwargs):
-        """
-        a generator function to return all pages, obtained by NextToken
-        """
+    @backoff.on_exception(
+        backoff.expo,
+        (Exception),
+        max_tries=10,
+        factor=3,
+    )
+    @timeout(15)
+    def _load_orders_single_page(self, mp, **kwargs):
+        orders = self.get_sp_orders_v2(mp)
+        return orders.search_orders(**kwargs)
 
-        for page in self.load_all_orders(mp, **kwargs):
-            orders = []
-            for order in page.payload.get("Orders"):
-                orders.append(order)
+    def load_order_page(self, mp, sandbox=False, **kwargs):
+        """Yield each page of raw v2026-01-01 order dicts from search_orders."""
+        if sandbox:
+            page = self._load_orders_single_page(mp, **kwargs)
+            yield page.payload.get("orders", [])
+        else:
+            for page in self._load_all_orders_paginated(mp, **kwargs):
+                yield page.payload.get("orders", [])
 
-            yield orders
+    def _search_included_data_for_catalog(self):
+        """includedData for search_orders: base fields plus tokens for selected children."""
+        selected_children = [
+            child.name
+            for child in self.child_streams
+            if child.selected or child.has_selected_descendents
+        ]
+        return build_search_included_data(selected_children)
+
+    def _sandbox_order_pages(self):
+        """Order pages for the sandbox, which only serves a fixed JP sample order."""
+        return self.load_order_page(
+            mp=SANDBOX_V2.marketplace,
+            sandbox=True,
+            createdAfter=SANDBOX_V2.created_after,
+            marketplaceIds=[SANDBOX_V2.marketplace_id],
+            includedData=SANDBOX_V2.included_data,
+        )
+
+    def _order_pages(self, marketplace_id, context):
+        """Order pages updated inside the sync window for one marketplace."""
+        start_date = self.get_starting_timestamp(context) or datetime(2000, 1, 1)
+        search_kwargs = {
+            "lastUpdatedAfter": start_date.strftime(SEARCH_DATE_FORMAT),
+            "includedData": self._search_included_data_for_catalog(),
+        }
+        if self.config.get("end_date"):
+            end_date = parse(self.config["end_date"])
+            search_kwargs["lastUpdatedBefore"] = end_date.strftime(SEARCH_DATE_FORMAT)
+        return self.load_order_page(mp=marketplace_id, **search_kwargs)
 
     @backoff.on_exception(
         backoff.expo,
@@ -245,41 +253,29 @@ class OrdersStream(AmazonSellerStream):
         max_tries=10,
         factor=3,
     )
-    def get_records(self, context: Optional[dict]) -> Iterable[dict]:
-        # Get start_date
-        start_date = self.get_starting_timestamp(context) or datetime(2000, 1, 1)
-        start_date = start_date.strftime("%Y-%m-%dT%H:%M:%S")
-        end_date = None
-        if self.config.get("end_date"):
-            end_date = parse(self.config.get("end_date"))
-            end_date = end_date.strftime("%Y-%m-%dT%H:%M:%S")
-            
+    def get_records(
+        self, context: Optional[dict]
+    ) -> Iterable[Tuple[dict, dict]]:
+        """Yield v0 order rows, each with a child context carrying the raw v2 order.
 
-        sandbox = self.config.get("sandbox", False)
-        if sandbox is True:
-            rows = self.load_order_page(
-                mp=context.get("marketplace_id"), CreatedAfter="TEST_CASE_200"
-            )
+        The Singer SDK accepts (record, child_context) tuples, so the child
+        streams build their rows from the order without calling the API again.
+        """
+        marketplace_id = context["marketplace_id"]
+        if self.config.get("sandbox", False):
+            pages = self._sandbox_order_pages()
         else:
-            if start_date and end_date:
-                rows = self.load_order_page(
-                    mp=context.get("marketplace_id"), 
-                    LastUpdatedAfter=start_date,
-                    LastUpdatedBefore = end_date
-                )
-            else:
-                rows = self.load_order_page(
-                    mp=context.get("marketplace_id"), 
-                    LastUpdatedAfter=start_date
-                )    
-        for row in rows:
-            for item in row:
-                yield item
+            pages = self._order_pages(marketplace_id, context)
 
-    def get_child_context(self, record: dict, context: Optional[dict]) -> dict:
-        """Return a context dictionary for child streams."""
-        mp = context.get("marketplace_id")
-        return {"AmazonOrderId": record["AmazonOrderId"], "marketplace_id": mp}
+        for order_page in pages:
+            for order_v2 in order_page:
+                record = transform_order_v2_to_v0(order_v2)
+                child_context = {
+                    "AmazonOrderId": record["AmazonOrderId"],
+                    "marketplace_id": marketplace_id,
+                    ORDER_V2_CONTEXT_KEY: OrderPayload(order_v2),
+                }
+                yield record, child_context
 
 
 class OrderItemsStream(AmazonSellerStream):
@@ -388,17 +384,10 @@ class OrderItemsStream(AmazonSellerStream):
     def get_records(self, context: Optional[dict]) -> Iterable[dict]:
         order_id = context.get("AmazonOrderId", [])
 
-        orders = self.get_sp_orders(context.get("marketplace_id"))
-        # self.state_partitioning_keys = context
         self.state_partitioning_keys = self.partitions[len(self.partitions) - 1]
-        # self.state_partitioning_keys = self.partitions
         self.logger.info(f"Requesting orderitems for order with AmazonOrderId {order_id}")
-        sandbox = self.config.get("sandbox", False)
-        if sandbox is False:
-            items = orders.get_order_items(order_id=order_id).payload
-        else:
-            items = orders.get_order_items("'TEST_CASE_200'").payload
-        return [items]
+        order = order_v2_from_child_context(context)
+        return [transform_order_items_v2_to_v0(order)]
 
 
 class OrderBuyerInfo(AmazonSellerStream):
@@ -430,10 +419,9 @@ class OrderBuyerInfo(AmazonSellerStream):
     def get_records(self, context: Optional[dict]) -> Iterable[dict]:
         order_id = context.get("AmazonOrderId", [])
 
-        orders = self.get_sp_orders(context.get("marketplace_id"))
         self.logger.info(f"Requesting orderbuyerinfo for order with AmazonOrderId {order_id}")
-        items = orders.get_order_buyer_info(order_id=order_id).payload
-        return [items]
+        order = order_v2_from_child_context(context)
+        return [transform_order_buyer_info_v2_to_v0(order)]
 
 
 class OrderAddress(AmazonSellerStream):
@@ -479,9 +467,8 @@ class OrderAddress(AmazonSellerStream):
         order_id = context.get("AmazonOrderId", [])
 
         self.logger.info(f"Requesting orderaddress for order with AmazonOrderId {order_id}")
-        orders = self.get_sp_orders(context.get("marketplace_id"))
-        items = orders.get_order_address(order_id=order_id).payload
-        return [items]
+        order = order_v2_from_child_context(context)
+        return [transform_order_address_v2_to_v0(order)]
 
 
 class OrderFinancialEvents(AmazonSellerStream):
@@ -1313,7 +1300,7 @@ class AFNInventoryCountryStream(AmazonSellerStream):
         report_types = ["GET_AFN_INVENTORY_DATA_BY_COUNTRY"]
         processing_status = self.config.get("processing_status")
         # Get list of valid marketplaces
-        marketplaces = self.get_valid_marketplaces()
+        marketplaces = [mp["id"] for mp in self.get_valid_marketplaces()]
         common_marketplaces = list(set(marketplaces).intersection(eu_marketplaces))
         marketplace_id = None
         if len(common_marketplaces) > 0:
