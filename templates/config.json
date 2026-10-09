@@ -15,5 +15,5 @@
     "GET_MERCHANT_LISTINGS_ALL_DATA"
   ],
   "processing_status": ["IN_QUEUE", "IN_PROGRESS", "DONE"],
-  "products_include_data": ["attributes", "identifiers", "summaries"]
+  "products_include_data": ["attributes", "identifiers", "relationships", "summaries"]
 }
