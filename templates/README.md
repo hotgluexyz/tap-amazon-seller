@@ -83,9 +83,10 @@ Report processing statuses to include when listing or filtering reports.
 ## Product Catalog
 
 #### `products_include_data` (array of strings or comma-separated string, optional)
-Data to include when fetching product catalog details (e.g. for Product Details streams). Can be an array or a comma-separated string.
-- **Example (array)**: `["attributes", "identifiers", "summaries"]`
-- **Example (string)**: `"attributes,identifiers,summaries"`
+Data to include when fetching `product_catalog_details` from the Catalog Items API. Can be an array or a comma-separated string.
+- **Default** (when omitted): `["attributes", "identifiers", "relationships"]`
+- **Example (array)**: `["attributes", "identifiers", "relationships", "summaries"]`
+- **Example (string)**: `"attributes,identifiers,relationships,summaries"`
 
 ---
 
@@ -121,6 +122,6 @@ Data to include when fetching product catalog details (e.g. for Product Details 
     "GET_MERCHANT_LISTINGS_ALL_DATA"
   ],
   "processing_status": ["IN_QUEUE", "IN_PROGRESS", "DONE"],
-  "products_include_data": ["attributes", "identifiers", "summaries"]
+  "products_include_data": ["attributes", "identifiers", "relationships", "summaries"]
 }
 ```

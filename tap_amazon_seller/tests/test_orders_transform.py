@@ -62,6 +62,9 @@ def order_v2():
                 "countryCode": "US",
             }
         },
+        "payment": {
+            "paymentExecutions": [{"paymentMethod": "Standard"}, {"paymentMethod": "COD"}]
+        },
         "packages": [
             {
                 "shipFromAddress": {
@@ -146,6 +149,8 @@ def test_order_header_is_mapped_to_v0(order_v2):
         "OrderTotal": {"CurrencyCode": "USD", "Amount": "20.97"},
         "NumberOfItemsShipped": 1,
         "NumberOfItemsUnshipped": 1,
+        "PaymentMethod": "Standard",
+        "PaymentMethodDetails": ["Standard", "COD"],
         "BuyerInfo": {
             "BuyerEmail": "buyer@example.com",
             "BuyerName": "Jane Buyer",
@@ -325,7 +330,7 @@ def test_address_omitted_without_recipient(order):
 @pytest.mark.parametrize(
     "selected, expected",
     [
-        ([], ["BUYER", "FULFILLMENT", "PACKAGES", "PROCEEDS", "RECIPIENT"]),
+        ([], ["BUYER", "FULFILLMENT", "PACKAGES", "PAYMENT", "PROCEEDS", "RECIPIENT"]),
         (
             ["orderitems", "orderbuyerinfo", "orderfinancialevents"],
             [
@@ -334,6 +339,7 @@ def test_address_omitted_without_recipient(order):
                 "EXPENSE",
                 "FULFILLMENT",
                 "PACKAGES",
+                "PAYMENT",
                 "PROCEEDS",
                 "PROMOTION",
                 "RECIPIENT",

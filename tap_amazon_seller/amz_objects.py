@@ -3,7 +3,14 @@ from sp_api.api import (
 )
 from sp_api.base import sp_endpoint, ApiResponse, fill_query_params
 
+DEFAULT_CATALOG_ITEMS_VERSION = "2022-04-01"
+
+
 class CatalogItems_v2(CatalogItems):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.version = DEFAULT_CATALOG_ITEMS_VERSION
 
     @sp_endpoint('/catalog/<version>/items/{}', method='GET')
     def get_catalog_item(self, asin=None, **kwargs) -> ApiResponse:

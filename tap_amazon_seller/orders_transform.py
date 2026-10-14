@@ -32,8 +32,11 @@ SANDBOX_V2 = SimpleNamespace(
 ORDER_V2_CONTEXT_KEY = "order_v2"
 
 # includedData the orders stream needs for its own row: fulfillment and proceeds,
-# buyer and recipient for BuyerInfo/ShippingAddress, packages for the ship-from address.
-SEARCH_INCLUDED_DATA_BASE = ["BUYER", "FULFILLMENT", "PACKAGES", "PROCEEDS", "RECIPIENT"]
+# buyer and recipient for BuyerInfo/ShippingAddress, packages for the ship-from address,
+# payment for PaymentMethod/PaymentMethodDetails.
+SEARCH_INCLUDED_DATA_BASE = [
+    "BUYER", "FULFILLMENT", "PACKAGES", "PAYMENT", "PROCEEDS", "RECIPIENT",
+]
 
 # Additional search_orders includedData tokens when a child stream is selected in the catalog.
 SEARCH_INCLUDED_DATA_BY_CHILD_STREAM = {
@@ -185,6 +188,12 @@ def _ship_from_address(order):
     return _address_v2_to_v0(address) if address else None
 
 
+def _payment_methods(order):
+    """Return the payment method of each payment execution."""
+    executions = (order.get("payment") or {}).get("paymentExecutions") or []
+    return [e["paymentMethod"] for e in executions if e.get("paymentMethod")]
+
+
 def _item_quantity_total(order, field):
     """Sum a fulfillment quantity over the order items, or None without items."""
     items = order.get("orderItems")
@@ -207,6 +216,7 @@ def transform_order_v2_to_v0(order: dict) -> dict:
     status = fulfillment.get("fulfillmentStatus")
     fulfilled_by = fulfillment.get("fulfilledBy")
     replaced_order_id = _replaced_order_id(order)
+    payment_methods = _payment_methods(order)
 
     return _without_nones(
         {
@@ -222,6 +232,8 @@ def transform_order_v2_to_v0(order: dict) -> dict:
             "OrderTotal": _money(grand_total) if grand_total else None,
             "NumberOfItemsShipped": _item_quantity_total(order, "quantityFulfilled"),
             "NumberOfItemsUnshipped": _item_quantity_total(order, "quantityUnfulfilled"),
+            "PaymentMethod": payment_methods[0] if payment_methods else None,
+            "PaymentMethodDetails": payment_methods or None,
             "BuyerInfo": _buyer_info(order.get("buyer") or {}),
             "ShippingAddress": _order_shipping_address(order) or None,
             "DefaultShipFromLocationAddress": _ship_from_address(order),
